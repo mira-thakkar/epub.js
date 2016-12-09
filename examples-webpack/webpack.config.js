@@ -3,7 +3,15 @@ var path = require('path')
 
 module.exports = {
   devtool: 'source-map',
-  devServer: { inline: true },
+  devServer: {
+    inline: true,
+    proxy: {
+      '/books': {
+        target: 'http://localhost:8080',
+        secure: false
+      }
+    }
+  },
   entry: {
     main: [
       './app/index.js',
