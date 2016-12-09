@@ -3,7 +3,7 @@ import './style'
 import ePub from '../../src'
 global.ePub = ePub // Bug in v3 need ePub to be a global
 
-const book = ePub('https://s3.amazonaws.com/epubjs/books/alice/OPS/package.opf')
+const book = ePub('/books-bk/bok3.epub')
 const rendition = book.renderTo('viewer', {
   width: '100%',
   height: 600

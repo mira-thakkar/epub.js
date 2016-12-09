@@ -5,6 +5,7 @@ components
 node_modules
 bower_components
 books
+books-bk
 lib
 dist
 documentation/html
