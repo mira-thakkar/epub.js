@@ -1,4 +1,4 @@
-import { qs } from "./core";
+import { qs, qsa } from "./core";
 import Url from "./url";
 
 export function replaceBase(doc, section){
@@ -43,10 +43,12 @@ export function replaceCanonical(doc, section){
 		head.appendChild(link);
 	}
 }
+// TODO: move me to Contents
+export function replaceLinks(contents, fn) {
 
-export function replaceLinks(view, renderer) {
-
-	var links = view.document.querySelectorAll("a[href]");
+	var links = contents.querySelectorAll("a[href]");
+	var base = qs(contents.ownerDocument, "base");
+	var location = base ? base.href : undefined;
 	var replaceLink = function(link){
 		var href = link.getAttribute("href");
 
@@ -54,39 +56,26 @@ export function replaceLinks(view, renderer) {
 			return;
 		}
 
-		var linkUrl = Url(href);
-		var relative = this.book.resolve(href, false);
+		var absolute = (href.indexOf("://") > -1);
+		var linkUrl = new Url(href, location);
 
-		if(linkUrl && linkUrl.protocol){
+		if(absolute){
 
 			link.setAttribute("target", "_blank");
 
 		}else{
-			/*
-			if(baseDirectory) {
-				// We must ensure that the file:// protocol is preserved for
-				// local file links, as in certain contexts (such as under
-				// Titanium), file links without the file:// protocol will not
-				// work
-				if (baseUri.protocol === "file") {
-					relative = core.resolveUrl(baseUri.base, href);
+			link.onclick = function(){
+
+				if(linkUrl && linkUrl.hash) {
+					fn(linkUrl.Path.path + linkUrl.hash);
+				} else if(linkUrl){
+					fn(linkUrl.Path.path);
 				} else {
-					relative = core.resolveUrl(baseDirectory, href);
+					fn(href);
 				}
-			} else {
-				relative = href;
-			}
-			*/
 
-			if(linkUrl.fragment) {
-				// do nothing with fragment yet
-			} else {
-				link.onclick = function(){
-					renderer.display(relative);
-					return false;
-				};
-			}
-
+				return false;
+			};
 		}
 	}.bind(this);
 

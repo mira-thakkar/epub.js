@@ -4,7 +4,7 @@ var BabiliPlugin = require("babili-webpack-plugin");
 var PROD = (process.env.NODE_ENV === 'production')
 var LEGACY = (process.env.LEGACY)
 var hostname = "localhost";
-var port = "8080";
+var port = 8080;
 var enter = LEGACY ? {
 		"epub.legacy": ["babel-polyfill", "./libs/url/url.js", "./src/epub.js"]
 	} : {
@@ -42,20 +42,28 @@ module.exports = {
 	},
 	module: {
 		loaders: [
-			LEGACY ? {
+			{
 				test: /\.js$/,
 				exclude: /node_modules/,
 				loader: "babel-loader",
-				query: {
+				query: LEGACY ? {
 					presets: ['es2015'],
 					plugins: [
 						"add-module-exports",
 					]
+				} : {
+					presets: [["env", {
+						"targets": {
+							"chrome": 54,
+							"safari" : 10,
+							"firefox" : 50,
+							"edge" : 14
+						}
+					}]],
+					plugins: [
+						"add-module-exports",
+					]
 				}
-			} : {
-				test: /\.js$/,
-				exclude: /node_modules/,
-				loader: "babel-loader"
 			}
 		]
 	}

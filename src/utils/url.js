@@ -18,11 +18,14 @@ class Url {
 		this.href = urlString;
 		this.protocol = "";
 		this.origin = "";
-		this.fragment = "";
+		this.hash = "";
+		this.hash = "";
 		this.search = "";
 		this.base = baseString;
 
-		if (!absolute && (typeof(baseString) !== "string") &&
+		if (!absolute &&
+				baseString !== false &&
+				typeof(baseString) !== "string" &&
 				window && window.location) {
 			this.base = window.location.href;
 		}
@@ -39,7 +42,7 @@ class Url {
 
 				this.protocol = this.Url.protocol;
 				this.origin = this.Url.origin;
-				this.fragment = this.Url.fragment;
+				this.hash = this.Url.hash;
 				this.search = this.Url.search;
 
 				pathname = this.Url.pathname;
