@@ -3,10 +3,10 @@ import './style'
 import ePub from '../../src'
 global.ePub = ePub // Bug in v3 need ePub to be a global
 
-const book = ePub('/books-bk/bok3.epub')
+const book = ePub('/books/moby-dick.epub')
 const rendition = book.renderTo('viewer', {
   width: '100%',
-  height: 600
+  height: '100%'
 })
 
 book.loaded.navigation.then(({toc}) => {
