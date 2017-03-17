@@ -165,11 +165,11 @@ class Contents {
 		return this.window.getComputedStyle(this.documentElement)["overflowY"];
 	}
 
-	css(property, value) {
+	css(property, value, priority) {
 		var content = this.content || this.document.body;
 
 		if (value) {
-			content.style[property] = value;
+			content.style.setProperty(property, value, priority ? "important" : "");
 		}
 
 		return this.window.getComputedStyle(content)[property];
@@ -461,13 +461,14 @@ class Contents {
 		}.bind(this));
 	}
 
-	// https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet/insertRule
+	// Array: https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet/insertRule
+	// Object: https://github.com/desirable-objects/json-to-css
 	addStylesheetRules(rules) {
 		var styleEl;
 		var styleSheet;
 		var key = "epubjs-inserted-css";
 
-		if(!this.document) return;
+		if(!this.document || !rules || rules.length === 0) return;
 
 		// Check if link already exists
 		styleEl = this.document.getElementById("#"+key);
@@ -482,21 +483,33 @@ class Contents {
 		// Grab style sheet
 		styleSheet = styleEl.sheet;
 
-		for (var i = 0, rl = rules.length; i < rl; i++) {
-			var j = 1, rule = rules[i], selector = rules[i][0], propStr = "";
-			// If the second argument of a rule is an array of arrays, correct our variables.
-			if (Object.prototype.toString.call(rule[1][0]) === "[object Array]") {
-				rule = rule[1];
-				j = 0;
-			}
+		if (Object.prototype.toString.call(rules) === "[object Array]") {
+			for (var i = 0, rl = rules.length; i < rl; i++) {
+				var j = 1, rule = rules[i], selector = rules[i][0], propStr = "";
+				// If the second argument of a rule is an array of arrays, correct our variables.
+				if (Object.prototype.toString.call(rule[1][0]) === "[object Array]") {
+					rule = rule[1];
+					j = 0;
+				}
 
-			for (var pl = rule.length; j < pl; j++) {
-				var prop = rule[j];
-				propStr += prop[0] + ":" + prop[1] + (prop[2] ? " !important" : "") + ";\n";
-			}
+				for (var pl = rule.length; j < pl; j++) {
+					var prop = rule[j];
+					propStr += prop[0] + ":" + prop[1] + (prop[2] ? " !important" : "") + ";\n";
+				}
 
-			// Insert CSS Rule
-			styleSheet.insertRule(selector + "{" + propStr + "}", styleSheet.cssRules.length);
+				// Insert CSS Rule
+				styleSheet.insertRule(selector + "{" + propStr + "}", styleSheet.cssRules.length);
+			}
+		} else {
+			const selectors = Object.keys(rules);
+			selectors.forEach((selector) => {
+				const definition = rules[selector];
+				const _rules = Object.keys(definition);
+				const result = _rules.map((rule) => {
+					return `${rule}:${definition[rule]}`;
+				}).join(';');
+				styleSheet.insertRule(`${selector}{${result}}`, styleSheet.cssRules.length);
+			});
 		}
 	}
 
@@ -620,6 +633,14 @@ class Contents {
 		return cfi.toRange(this.document, ignoreClass);
 	}
 
+	cfiFromRange(range, ignoreClass){
+		return new EpubCFI(range, this.cfiBase, ignoreClass).toString();
+	}
+
+	cfiFromNode(node, ignoreClass){
+		return new EpubCFI(node, this.cfiBase, ignoreClass).toString();
+	}
+
 	map(layout){
 		var map = new Mapping(layout);
 		return map.section();
@@ -636,15 +657,15 @@ class Contents {
 		}
 
 		this.css("margin", "0");
-		this.css("boxSizing", "border-box");
+		this.css("box-sizing", "border-box");
 
 	}
 
 	columns(width, height, columnWidth, gap){
-		var COLUMN_AXIS = prefixed("columnAxis");
-		var COLUMN_GAP = prefixed("columnGap");
-		var COLUMN_WIDTH = prefixed("columnWidth");
-		var COLUMN_FILL = prefixed("columnFill");
+		var COLUMN_AXIS = prefixed("column-axis");
+		var COLUMN_GAP = prefixed("column-gap");
+		var COLUMN_WIDTH = prefixed("column-width");
+		var COLUMN_FILL = prefixed("column-fill");
 
 		this.width(width);
 		this.height(height);
@@ -653,10 +674,11 @@ class Contents {
 		this.viewport({ width: width, height: height, scale: 1.0 });
 
 		// this.overflowY("hidden");
-		this.css("overflowY", "hidden");
-		this.css("margin", "0");
-		this.css("boxSizing", "border-box");
-		this.css("maxWidth", "inherit");
+		this.css("overflow-y", "hidden");
+		this.css("margin", "0", true);
+		this.css("padding", "0", true);
+		this.css("box-sizing", "border-box");
+		this.css("max-width", "inherit");
 
 		this.css(COLUMN_AXIS, "horizontal");
 		this.css(COLUMN_FILL, "auto");
@@ -669,7 +691,7 @@ class Contents {
 		var scaleStr = "scale(" + scale + ")";
 		var translateStr = "";
 		// this.css("position", "absolute"));
-		this.css("transformOrigin", "top left");
+		this.css("transform-origin", "top left");
 
 		if (offsetX >= 0 || offsetY >= 0) {
 			translateStr = " translate(" + (offsetX || 0 )+ "px, " + (offsetY || 0 )+ "px )";
@@ -696,7 +718,7 @@ class Contents {
 		// Scale to the correct size
 		this.scaler(scale, 0, offsetY);
 
-		this.css("backgroundColor", "transparent");
+		this.css("background-color", "transparent");
 	}
 
 	mapPage(cfiBase, start, end) {

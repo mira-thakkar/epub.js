@@ -34,8 +34,8 @@ export function isFloat(n) {
 }
 
 export function prefixed(unprefixed) {
-	var vendors = ["Webkit", "Moz", "O", "ms" ];
-	// var prefixes = ["-Webkit-", "-moz-", "-o-", "-ms-"];
+	//var vendors = ["Webkit", "Moz", "O", "ms" ];
+	var vendors = ["-Webkit-", "-moz-", "-o-", "-ms-"];
 	var upper = unprefixed[0].toUpperCase() + unprefixed.slice(1);
 	var length = vendors.length;
 
@@ -407,12 +407,14 @@ export function walk(node,callback){
 	}
 }
 
-export function blob2base64(blob, cb) {
-	var reader = new FileReader();
-	reader.readAsDataURL(blob);
-	reader.onloadend = function() {
-		cb(reader.result);
-	};
+export function blob2base64(blob) {
+	return new Promise(function(resolve, reject) {
+		var reader = new FileReader();
+		reader.readAsDataURL(blob);
+		reader.onloadend = function() {
+			resolve(reader.result);
+		};
+	});
 }
 
 // From: https://developer.mozilla.org/en-US/docs/Mozilla/JavaScript_code_modules/Promise.jsm/Deferred#backwards_forwards_compatible
@@ -467,7 +469,7 @@ export function querySelectorByType(html, element, type){
 
 export function findChildren(el) {
 	var result = [];
-	var childNodes = el.parentNode.childNodes;
+	var childNodes = el.childNodes;
 	for (var i = 0; i < childNodes.length; i++) {
 		let node = childNodes[i];
 		if (node.nodeType === 1) {

@@ -21,6 +21,7 @@ import Contents from "./contents";
  * @param {string} options.layout
  * @param {string} options.spread
  * @param {int} options.minSpreadWidth overridden by spread: none (never) / both (always)
+ * @param {string} options.stylesheet url of stylesheet to be injected
  */
 class Rendition {
 	constructor(book, options) {
@@ -34,7 +35,9 @@ class Rendition {
 			flow: null,
 			layout: null,
 			spread: null,
-			minSpreadWidth: 800
+			minSpreadWidth: 800,
+			stylesheet: null,
+			script: null
 		});
 
 		extend(this.settings, options);
@@ -70,6 +73,14 @@ class Rendition {
 		this.hooks.content.register(this.handleLinks.bind(this));
 		this.hooks.content.register(this.passEvents.bind(this));
 		this.hooks.content.register(this.adjustImages.bind(this));
+
+		if (this.settings.stylesheet) {
+			this.book.spine.hooks.content.register(this.injectStylesheet.bind(this));
+		}
+
+		if (this.settings.script) {
+			this.book.spine.hooks.content.register(this.injectScript.bind(this));
+		}
 
 		// this.hooks.display.register(this.afterDisplay.bind(this));
 		this.themes = new Themes(this);
@@ -166,9 +177,7 @@ class Rendition {
 
 		// Listen for scroll changes
 		this.manager.on("scroll", this.reportLocation.bind(this));
-
-
-		this.on("displayed", this.reportLocation.bind(this));
+		this.manager.on("scroll", () => console.log("scrolled"));
 
 		// Trigger that rendering has started
 		this.emit("started");
@@ -221,6 +230,9 @@ class Rendition {
 	 * @return {Promise}
 	 */
 	_display(target){
+		if (!this.book) {
+			return;
+		}
 		var isCfiString = this.epubcfi.isCfiString(target);
 		var displaying = new defer();
 		var displayed = displaying.promise;
@@ -239,20 +251,10 @@ class Rendition {
 			return displayed;
 		}
 
-		// Trim the target fragment
-		// removing the chapter
-		if(!isCfiString && typeof target === "string" &&
-			target.indexOf("#") > -1) {
-			moveTo = target.substring(target.indexOf("#")+1);
-		}
-
-		if (isCfiString) {
-			moveTo = target;
-		}
-
-		return this.manager.display(section, moveTo)
+		return this.manager.display(section, target)
 			.then(function(){
-				// this.emit("displayed", section);
+				this.emit("displayed", section);
+				this.reportLocation();
 			}.bind(this));
 
 	}
@@ -310,7 +312,7 @@ class Rendition {
 	afterDisplayed(view){
 		this.hooks.content.trigger(view.contents, this);
 		this.emit("rendered", view.section);
-		this.reportLocation();
+		// this.reportLocation();
 	}
 
 	/**
@@ -513,9 +515,32 @@ class Rendition {
 	 */
 	destroy(){
 		// Clear the queue
-		this.q.clear();
+		// this.q.clear();
+		// this.q = undefined;
 
-		this.manager.destroy();
+		this.manager && this.manager.destroy();
+
+		this.book = undefined;
+
+		this.views = null;
+
+		// this.hooks.display.clear();
+		// this.hooks.serialize.clear();
+		// this.hooks.content.clear();
+		// this.hooks.layout.clear();
+		// this.hooks.render.clear();
+		// this.hooks.show.clear();
+		// this.hooks = {};
+
+		// this.themes.destroy();
+		// this.themes = undefined;
+
+		// this.epubcfi = undefined;
+
+		// this.starting = undefined;
+		// this.started = undefined;
+
+
 	}
 
 	/**
@@ -559,7 +584,7 @@ class Rendition {
 	 */
 	range(cfi, ignoreClass){
 		var _cfi = new EpubCFI(cfi);
-		var found = this.visible().filter(function (view) {
+		var found = this.manager.visible().filter(function (view) {
 			if(_cfi.spinePos === view.index) return true;
 		});
 
@@ -581,14 +606,14 @@ class Rendition {
 			});
 		}
 
-		contents.addStylesheetRules([
-			["img",
-				["max-width", (this._layout.columnWidth) + "px; !important"],
-				["max-height", (this._layout.height) + "px; !important"],
-				["object-fit", "contain"],
-				["page-break-inside", "avoid"]
-			]
-		]);
+		contents.addStylesheetRules({
+			"img" : {
+				"max-width": (this._layout.columnWidth) + "px !important",
+				"max-height": (this._layout.height) + "px !important",
+				"object-fit": "contain",
+				"page-break-inside": "avoid"
+			}
+		});
 		return new Promise(function(resolve, reject){
 			// Wait to apply
 			setTimeout(function() {
@@ -607,6 +632,23 @@ class Rendition {
 			this.display(relative);
 		});
 	}
+
+	injectStylesheet(doc, section) {
+		let style = doc.createElement("link");
+		style.setAttribute("type", "text/css");
+		style.setAttribute("rel", "stylesheet");
+		style.setAttribute("href", this.settings.stylesheet);
+		doc.getElementsByTagName("head")[0].appendChild(style);
+	}
+
+	injectScript(doc, section) {
+		let script = doc.createElement("script");
+		script.setAttribute("type", "text/javascript");
+		script.setAttribute("src", this.settings.script);
+		script.textContent = " "; // Needed to prevent self closing tag
+		doc.getElementsByTagName("head")[0].appendChild(script);
+	}
+
 }
 
 //-- Enable binding events to Renderer
