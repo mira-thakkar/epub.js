@@ -5,14 +5,13 @@ global.ePub = ePub // Bug in v3 need ePub to be a global
 
 const book = ePub('/books/moby-dick.epub')
 const rendition = book.renderTo('viewer', {
+  contained: true,
   width: '100%',
   height: '100%'
 })
+rendition.display(10)
 
 book.loaded.navigation.then(({toc}) => {
-  if (toc.length > 0) {
-    rendition.display(toc[0].href)
-  }
   const select = document.getElementById('toc')
   const docfrag = document.createDocumentFragment()
   toc.forEach((chapter) => {
@@ -41,6 +40,10 @@ prev.addEventListener('click', (e) => rendition.prev())
 rendition.on('keyup', keyListener)
 document.addEventListener('keyup', keyListener, false)
 
+window.addEventListener('resize', () => {
+  // console.log('resize')
+})
+
 rendition.on('rendered', (section) => {
   const nextSection = section.next()
   const prevSection = section.prev()
@@ -52,4 +55,4 @@ rendition.on('rendered', (section) => {
   prev.textContent = prevSection ? '‹' : ''
 })
 
-rendition.on('locationChanged', (location) => console.log(location))
+// rendition.on('locationChanged', (location) => console.log(location))
