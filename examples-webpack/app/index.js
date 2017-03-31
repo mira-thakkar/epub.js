@@ -7,7 +7,8 @@ const book = ePub('/books/moby-dick.epub')
 const rendition = book.renderTo('viewer', {
   contained: true,
   width: '100%',
-  height: '100%'
+  height: '100%',
+  enableSrcdoc: false
 })
 rendition.display(10)
 
