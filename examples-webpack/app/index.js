@@ -8,7 +8,7 @@ const rendition = book.renderTo('viewer', {
   contained: true,
   width: '100%',
   height: '100%',
-  enableSrcdoc: false
+  disableSrcdoc: true
 })
 rendition.display(10)
 
