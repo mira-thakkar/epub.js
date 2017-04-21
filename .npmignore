@@ -8,12 +8,13 @@ tools
 .eslintrc.js
 .jshintrc
 .nojekyll
-.travis
+.travis.yml
 .watchmanconfig
 API.js
-bower.js
+bower.json
 documentation.yml
 gulpfile.js
 karma.conf.js
 webpack.config.js
 npm-debug.log
+src

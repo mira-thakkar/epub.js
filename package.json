@@ -3,8 +3,6 @@
   "version": "0.3.25",
   "description": "Parse and Render Epubs",
   "main": "lib/index.js",
-  "jsnext:main": "src/index.js",
-  "module": "src/index.js",
   "repository": "https://github.com/gerhardsletten/epub.js",
   "directories": {
     "test": "test"
