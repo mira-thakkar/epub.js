@@ -1,11 +1,11 @@
 {
-  "name": "epubjs",
+  "name": "@gerhardsletten/epubjs",
   "version": "0.3.25",
   "description": "Parse and Render Epubs",
   "main": "lib/index.js",
   "jsnext:main": "src/index.js",
   "module": "src/index.js",
-  "repository": "https://github.com/futurepress/epub.js",
+  "repository": "https://github.com/gerhardsletten/epub.js",
   "directories": {
     "test": "test"
   },
@@ -19,7 +19,7 @@
     "legacy": "NODE_ENV=production LEGACY=true npm run build",
     "compile": "./node_modules/.bin/babel --optional runtime -d lib/ src/",
     "watch": "./node_modules/.bin/babel --watch --optional runtime -d lib/ src/",
-    "prepublish": "npm run compile && npm run build && npm run minify && npm run legacy"
+    "prepublish": "npm run compile"
   },
   "author": "fchasen@gmail.com",
   "license": "BSD-2-Clause",
@@ -63,6 +63,7 @@
     "portfinder": "^1.0.13",
     "raw-loader": "^0.5.1",
     "serve-static": "^1.11.2",
+    "stream-browserify": "^2.0.1",
     "uglify": "^0.1.5",
     "vinyl-buffer": "^1.0.0",
     "vinyl-source-stream": "^1.1.0",
@@ -74,7 +75,6 @@
     "event-emitter": "^0.3.4",
     "jszip": "^3.1.3",
     "path-webpack": "^0.0.3",
-    "stream-browserify": "^2.0.1",
     "xmldom": "^0.1.27"
   }
 }

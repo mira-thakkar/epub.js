@@ -8,3 +8,4 @@ books
 lib
 dist
 documentation/html
+npm-debug.log
