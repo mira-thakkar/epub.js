@@ -44,7 +44,7 @@ module.exports = {
 		loaders: [
 			{
 				test: /\.js$/,
-				exclude: /node_modules\/(?!(marks-pane)\/).*/,
+				exclude: /node_modules/,
 				loader: "babel-loader",
 				query: LEGACY ? {
 					presets: ['es2015'],
