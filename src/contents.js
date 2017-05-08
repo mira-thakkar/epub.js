@@ -3,6 +3,7 @@ import {isNumber, prefixed} from "./utils/core";
 import EpubCFI from "./epubcfi";
 import Mapping from "./mapping";
 import {replaceLinks} from "./utils/replacements";
+import { Pane, Highlight, Underline } from "marks-pane";
 
 // Dom events to listen for
 const EVENTS = ["keydown", "keyup", "keypressed", "mouseup", "mousedown", "click", "touchend", "touchstart"];
@@ -23,6 +24,11 @@ class Contents {
 		};
 
 		this.cfiBase = cfiBase || "";
+
+		this.pane = undefined;
+		this.highlights = {};
+		this.underlines = {};
+		this.marks = {};
 
 		this.listeners();
 	}
@@ -290,6 +296,8 @@ class Contents {
 		this.removeEventListeners();
 
 		this.removeSelectionListeners();
+
+		clearTimeout(this.expanding);
 	}
 
 	resizeListeners() {
@@ -306,6 +314,8 @@ class Contents {
 				width: width,
 				height: height
 			};
+
+			this.pane && this.pane.render();
 
 			this.emit("resize", this._size);
 		}
@@ -464,7 +474,8 @@ class Contents {
 				if ( !ready && (!this.readyState || this.readyState == "complete") ) {
 					ready = true;
 					// Let apply
-					setTimeout(function(){
+					setTimeout(() => {
+						this.pane && this.pane.render();
 						resolve(true);
 					}, 1);
 				}
@@ -525,6 +536,7 @@ class Contents {
 				styleSheet.insertRule(`${selector}{${result}}`, styleSheet.cssRules.length);
 			});
 		}
+		this.pane && this.pane.render();
 	}
 
 	addScript(src) {
@@ -625,7 +637,7 @@ class Contents {
 		this.selectionEndTimeout = setTimeout(function() {
 			var selection = this.window.getSelection();
 			this.triggerSelectedEvent(selection);
-		}.bind(this), 500);
+		}.bind(this), 250);
 	}
 
 	triggerSelectedEvent(selection){
@@ -745,6 +757,122 @@ class Contents {
 		replaceLinks(this.content, (href) => {
 			this.emit("link", href);
 		});
+	}
+
+	highlight(cfiRange, data={}, cb) {
+		let range = this.range(cfiRange);
+		let emitter = () => {
+			this.emit("markClicked", cfiRange, data);
+		};
+
+		data["epubcfi"] = cfiRange;
+
+		if (!this.pane) {
+			this.pane = new Pane(this.content, this.document.body);
+		}
+
+		let m = new Highlight(range, "epubjs-hl", data, {'fill': 'yellow', 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply'});
+		let h = this.pane.addMark(m);
+
+		this.highlights[cfiRange] = { "mark": h, "element": h.element, "listeners": [emitter, cb] };
+
+		h.element.addEventListener("click", emitter);
+
+		if (cb) {
+			h.element.addEventListener("click", cb);
+		}
+		return h;
+	}
+
+	underline(cfiRange, data={}, cb) {
+		let range = this.range(cfiRange);
+		let emitter = () => {
+			this.emit("markClicked", cfiRange, data);
+		};
+
+		data["epubcfi"] = cfiRange;
+
+		if (!this.pane) {
+			this.pane = new Pane(this.content, this.document.body);
+		}
+
+		let m = new Underline(range, "epubjs-ul", data, {'stroke': 'black', 'stroke-opacity': '0.3', 'mix-blend-mode': 'multiply'});
+		let h = this.pane.addMark(m);
+
+		this.underlines[cfiRange] = { "mark": h, "element": h.element, "listeners": [emitter, cb] };
+
+		h.element.addEventListener("click", emitter);
+
+		if (cb) {
+			h.element.addEventListener("click", cb);
+		}
+		return h;
+	}
+
+	mark(cfiRange, data={}, cb) {
+		let range = this.range(cfiRange);
+
+		let container = range.commonAncestorContainer;
+		let parent = (container.nodeType === 1) ? container : container.parentNode;
+		let emitter = () => {
+			this.emit("markClicked", cfiRange, data);
+		};
+
+		parent.setAttribute("ref", "epubjs-mk");
+
+		parent.dataset["epubcfi"] = cfiRange;
+
+		if (data) {
+			Object.keys(data).forEach((key) => {
+				parent.dataset[key] = data[key];
+			});
+		}
+
+		parent.addEventListener("click", emitter);
+
+		if (cb) {
+			parent.addEventListener("click", cb);
+		}
+
+		this.marks[cfiRange] = { "element": parent, "listeners": [emitter, cb] };
+
+		return parent;
+	}
+
+	unhighlight(cfiRange) {
+		let item;
+		if (cfiRange in this.highlights) {
+			item = this.highlights[cfiRange];
+			this.pane.removeMark(item.mark);
+			item.listeners.forEach((l) => {
+				if (l) { item.element.removeEventListener("click", l) };
+			});
+			delete this.highlights[cfiRange];
+		}
+	}
+
+	ununderline(cfiRange) {
+		let item;
+		if (cfiRange in this.underlines) {
+			item = this.underlines[cfiRange];
+			this.pane.removeMark(item.mark);
+			item.listeners.forEach((l) => {
+				if (l) { item.element.removeEventListener("click", l) };
+			});
+			delete this.underlines[cfiRange];
+		}
+	}
+
+	unmark(cfiRange) {
+		let item;
+		if (cfiRange in this.marks) {
+			item = this.marks[cfiRange];
+			item.element.removeAttribute("ref");
+			item.listeners.forEach((l) => {
+				if (l) { item.element.removeEventListener("click", l) };
+			});
+			delete this.marks[cfiRange];
+		}
 	}
 
 	destroy() {
