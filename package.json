@@ -1,6 +1,6 @@
 {
   "name": "@gerhardsletten/epubjs",
-  "version": "0.3.32",
+  "version": "0.3.33",
   "description": "Parse and Render Epubs",
   "main": "lib/index.js",
   "repository": "https://github.com/gerhardsletten/epub.js",
