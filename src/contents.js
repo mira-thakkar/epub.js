@@ -50,7 +50,8 @@ class Contents {
 			// this.content.style.width = w;
 		}
 
-		return this.window.getComputedStyle(frame)["width"];
+		var computedStyle = this.window.getComputedStyle(frame);
+		return computedStyle && computedStyle["width"];
 
 
 	}
@@ -68,7 +69,8 @@ class Contents {
 			// this.content.style.height = h;
 		}
 
-		return this.window.getComputedStyle(frame)["height"];
+		var computedStyle = this.window.getComputedStyle(frame);
+		return computedStyle && computedStyle["height"];
 
 	}
 
@@ -84,7 +86,8 @@ class Contents {
 			content.style.width = w;
 		}
 
-		return this.window.getComputedStyle(content)["width"];
+		var computedStyle = this.window.getComputedStyle(content);
+		return computedStyle && computedStyle["width"];
 
 
 	}
@@ -101,7 +104,8 @@ class Contents {
 			content.style.height = h;
 		}
 
-		return this.window.getComputedStyle(content)["height"];
+		var computedStyle = this.window.getComputedStyle(content);
+		return computedStyle && computedStyle["height"];
 
 	}
 
@@ -178,7 +182,8 @@ class Contents {
 			content.style.setProperty(property, value, priority ? "important" : "");
 		}
 
-		return this.window.getComputedStyle(content)[property];
+		var computedStyle = this.window.getComputedStyle(content);
+		return computedStyle && computedStyle[property];
 	}
 
 	viewport(options) {
