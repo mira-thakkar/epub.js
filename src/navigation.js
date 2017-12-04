@@ -88,6 +88,7 @@ class Navigation {
 				var tocLink = qs(linkElm, 'a'),
 						tocLinkData = {
 							id: -1,
+							purchased: !tocLink.hasAttribute('purchased'),
 							href: tocLink.getAttribute('href'),
 							label: tocLink.textContent,
 							parent: null
@@ -207,7 +208,8 @@ class Navigation {
 			"href": src,
 			"label": text,
 			"subitems" : subitems,
-			"parent" : parent
+			"parent" : parent,
+			"purchased" : !item.hasAttribute("purchased"),
 		};
 	}
 
