@@ -1,7 +1,7 @@
 import EpubCFI from "./epubcfi";
 import Hook from "./utils/hook";
 import Section from "./section";
-import {replaceBase, replaceCanonical} from "./utils/replacements";
+import {replaceBase, replaceCanonical, replaceMeta} from "./utils/replacements";
 
 /**
  * A collection of Spine Items
@@ -19,6 +19,7 @@ class Spine {
 		// Register replacements
 		this.hooks.content.register(replaceBase);
 		this.hooks.content.register(replaceCanonical);
+		this.hooks.content.register(replaceMeta);
 
 		this.epubcfi = new EpubCFI();
 
@@ -36,7 +37,7 @@ class Spine {
 	 * @param  {Package} _package
 	 * @param  {method} resolver URL resolver
 	 */
-	unpack(_package, resolver) {
+	unpack(_package, resolver, canonical) {
 
 		this.items = _package.spine;
 		this.manifest = _package.manifest;
@@ -48,22 +49,56 @@ class Spine {
 			var manifestItem = this.manifest[item.idref];
 			var spineItem;
 
+			item.index = index;
 			item.cfiBase = this.epubcfi.generateChapterComponent(this.spineNodeIndex, item.index, item.idref);
 
 			if (item.href) {
 				item.url = resolver(item.href, true);
+				item.canonical = canonical(item.href);
 			}
 
 			if(manifestItem) {
 				item.href = manifestItem.href;
 				item.url = resolver(item.href, true);
+				item.canonical = canonical(item.href);
+
 				if(manifestItem.properties.length){
 					item.properties.push.apply(item.properties, manifestItem.properties);
 				}
 			}
 
-			item.prev = function(){ return this.get(index-1); }.bind(this);
-			item.next = function(){ return this.get(index+1); }.bind(this);
+			if (item.linear === "yes") {
+				item.prev = function() {
+					let prevIndex = item.index;
+					while (prevIndex > 0) {
+						let prev = this.get(prevIndex-1);
+						if (prev && prev.linear) {
+							return prev;
+						}
+						prevIndex -= 1;
+					}
+					return;
+				}.bind(this);
+				item.next = function() {
+					let nextIndex = item.index;
+					while (nextIndex < this.spineItems.length-1) {
+						let next = this.get(nextIndex+1);
+						if (next && next.linear) {
+							return next;
+						}
+						nextIndex += 1;
+					}
+					return;
+				}.bind(this);
+			} else {
+				item.prev = function() {
+					return;
+				}
+				item.next = function() {
+					return;
+				}
+			}
+
 
 			spineItem = new Section(item, this.hooks);
 
@@ -77,7 +112,7 @@ class Spine {
 
 	/**
 	 * Get an item from the spine
-	 * @param  {[string|int]} target
+	 * @param  {string|int} [target]
 	 * @return {Section} section
 	 * @example spine.get();
 	 * @example spine.get(1);
@@ -87,17 +122,25 @@ class Spine {
 	get(target) {
 		var index = 0;
 
-		if(this.epubcfi.isCfiString(target)) {
+		if (typeof target === "undefined") {
+			while (index < this.spineItems.length) {
+				let next = this.spineItems[index];
+				if (next && next.linear) {
+					break;
+				}
+				index += 1;
+			}
+		} else if(this.epubcfi.isCfiString(target)) {
 			let cfi = new EpubCFI(target);
 			index = cfi.spinePos;
-		} else if(target && (typeof target === "number" || isNaN(target) === false)){
+		} else if(typeof target === "number" || isNaN(target) === false){
 			index = target;
-		} else if(target && target.indexOf("#") === 0) {
+		} else if(typeof target === "string" && target.indexOf("#") === 0) {
 			index = this.spineById[target.substring(1)];
-		} else if(target) {
+		} else if(typeof target === "string") {
 			// Remove fragments
 			target = target.split("#")[0];
-			index = this.spineByHref[target];
+			index = this.spineByHref[target] || this.spineByHref[encodeURI(target)];
 		}
 
 		return this.spineItems[index] || null;
@@ -114,7 +157,12 @@ class Spine {
 
 		this.spineItems.push(section);
 
+		// Encode and Decode href lookups
+		// see pr for details: https://github.com/futurepress/epub.js/pull/358
+		this.spineByHref[decodeURI(section.href)] = index;
+		this.spineByHref[encodeURI(section.href)] = index;
 		this.spineByHref[section.href] = index;
+
 		this.spineById[section.idref] = index;
 
 		return index;
@@ -164,6 +212,31 @@ class Spine {
 	 */
 	each() {
 		return this.spineItems.forEach.apply(this.spineItems, arguments);
+	}
+
+	first() {
+		let index = 0;
+
+		do {
+			let next = this.get(index);
+
+			if (next && next.linear) {
+				return next;
+			}
+			index += 1;
+		} while (index < this.spineItems.length) ;
+	}
+
+	last() {
+		let index = this.spineItems.length-1;
+
+		do {
+			let prev = this.get(index);
+			if (prev && prev.linear) {
+				return prev;
+			}
+			index -= 1;
+		} while (index >= 0);
 	}
 
 	destroy() {

@@ -147,7 +147,7 @@ class Packaging {
 	parseSpine(spineXml, manifest){
 		var spine = [];
 
-		var selected = spineXml.getElementsByTagName("itemref");
+		var selected = qsa(spineXml, "itemref");
 		var items = Array.prototype.slice.call(selected);
 
 		// var epubcfi = new EpubCFI();
@@ -163,7 +163,7 @@ class Packaging {
 
 			var itemref = {
 				"idref" : idref,
-				"linear" : item.getAttribute("linear") || "",
+				"linear" : item.getAttribute("linear") || "yes",
 				"properties" : propArray,
 				// "href" : manifest[Id].href,
 				// "url" :  manifest[Id].url,

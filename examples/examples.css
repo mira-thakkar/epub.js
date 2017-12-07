@@ -29,7 +29,7 @@ body {
   height: 600px;
   box-shadow: 0 0 4px #ccc;
   border-radius: 5px;
-  padding: 20px 40px;
+  padding: 0;
   position: relative;
   margin: 10px auto;
   background: white url('ajax-loader.gif') center center no-repeat;
@@ -61,11 +61,11 @@ body {
 }
 
 #prev {
-  left: 40px;
+  left: 0;
 }
 
 #next {
-  right: 40px;
+  right: 0;
 }
 
 #toc {
@@ -86,6 +86,18 @@ body {
     opacity: .15;
     box-shadow: -2px 0 15px rgba(0, 0, 0, 1);
     content:  "";
+  }
+
+  #viewer.spreads.single:after {
+    display: none;
+  }
+
+  #prev {
+    left: 40px;
+  }
+
+  #next {
+    right: 40px;
   }
 }
 

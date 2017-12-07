@@ -4,24 +4,29 @@ import Hook from "./utils/hook";
 import EpubCFI from "./epubcfi";
 import Queue from "./utils/queue";
 import Layout from "./layout";
-import Mapping from "./mapping";
+// import Mapping from "./mapping";
 import Themes from "./themes";
 import Contents from "./contents";
+import Annotations from "./annotations";
+import { EVENTS } from "./utils/constants";
 
 /**
- * [Rendition description]
+ * Displays an Epub as a series of Views for each Section.
+ * Requires Manager and View class to handle specifics of rendering
+ * the section contetn.
  * @class
  * @param {Book} book
- * @param {object} options
- * @param {int} options.width
- * @param {int} options.height
- * @param {string} options.ignoreClass
- * @param {string} options.manager
- * @param {string} options.view
- * @param {string} options.layout
- * @param {string} options.spread
- * @param {int} options.minSpreadWidth overridden by spread: none (never) / both (always)
- * @param {string} options.stylesheet url of stylesheet to be injected
+ * @param {object} [options]
+ * @param {number} [options.width]
+ * @param {number} [options.height]
+ * @param {string} [options.ignoreClass] class for the cfi parser to ignore
+ * @param {string | function | object} [options.manager='default']
+ * @param {string | function} [options.view='iframe']
+ * @param {string} [options.layout] layout to force
+ * @param {string} [options.spread] force spread value
+ * @param {number} [options.minSpreadWidth] overridden by spread: none (never) / both (always)
+ * @param {string} [options.stylesheet] url of stylesheet to be injected
+ * @param {string} [options.script] url of script to be injected
  */
 class Rendition {
 	constructor(book, options) {
@@ -46,26 +51,19 @@ class Rendition {
 			this.manager = this.settings.manager;
 		}
 
-		this.viewSettings = {
-			ignoreClass: this.settings.ignoreClass
-		};
-
 		this.book = book;
-
-		this.views = null;
 
 		/**
 		 * Adds Hook methods to the Rendition prototype
-		 * @property {Hook} hooks
+		 * @member {object} hooks
+		 * @property {Hook} hooks.content
+		 * @memberof Rendition
 		 */
 		this.hooks = {};
 		this.hooks.display = new Hook(this);
 		this.hooks.serialize = new Hook(this);
-		/**
-		 * @property {method} hooks.content
-		 * @type {Hook}
-		 */
 		this.hooks.content = new Hook(this);
+		this.hooks.unloaded = new Hook(this);
 		this.hooks.layout = new Hook(this);
 		this.hooks.render = new Hook(this);
 		this.hooks.show = new Hook(this);
@@ -73,6 +71,8 @@ class Rendition {
 		this.hooks.content.register(this.handleLinks.bind(this));
 		this.hooks.content.register(this.passEvents.bind(this));
 		this.hooks.content.register(this.adjustImages.bind(this));
+
+		this.book.spine.hooks.content.register(this.injectIdentifier.bind(this));
 
 		if (this.settings.stylesheet) {
 			this.book.spine.hooks.content.register(this.injectStylesheet.bind(this));
@@ -82,18 +82,60 @@ class Rendition {
 			this.book.spine.hooks.content.register(this.injectScript.bind(this));
 		}
 
-		// this.hooks.display.register(this.afterDisplay.bind(this));
+		/**
+		 * @member {Themes} themes
+		 * @memberof Rendition
+		 */
 		this.themes = new Themes(this);
+
+		/**
+		 * @member {Annotations} annotations
+		 * @memberof Rendition
+		 */
+		this.annotations = new Annotations(this);
 
 		this.epubcfi = new EpubCFI();
 
 		this.q = new Queue(this);
 
+		/**
+		 * A Rendered Location Range
+		 * @typedef location
+		 * @type {Object}
+		 * @property {object} start
+		 * @property {string} start.index
+		 * @property {string} start.href
+		 * @property {object} start.displayed
+		 * @property {EpubCFI} start.cfi
+		 * @property {number} start.location
+		 * @property {number} start.percentage
+		 * @property {number} start.displayed.page
+		 * @property {number} start.displayed.total
+		 * @property {object} end
+		 * @property {string} end.index
+		 * @property {string} end.href
+		 * @property {object} end.displayed
+		 * @property {EpubCFI} end.cfi
+		 * @property {number} end.location
+		 * @property {number} end.percentage
+		 * @property {number} end.displayed.page
+		 * @property {number} end.displayed.total
+		 * @property {boolean} atStart
+		 * @property {boolean} atEnd
+		 * @memberof Rendition
+		 */
+		this.location = undefined;
+
+		// Hold queue until book is opened
 		this.q.enqueue(this.book.opened);
 
-		// Block the queue until rendering is started
 		this.starting = new defer();
+		/**
+		 * @member {promise} started returns after the rendition has started
+		 * @memberof Rendition
+		 */
 		this.started = this.starting.promise;
+		// Block the queue until rendering is started
 		this.q.enqueue(this.start);
 	}
 
@@ -106,20 +148,19 @@ class Rendition {
 	}
 
 	/**
-	 * Require the manager from passed string, or as a function
-	 * @param  {string|function} manager [description]
+	 * Require the manager from passed string, or as a class function
+	 * @param  {string|object} manager [description]
 	 * @return {method}
 	 */
 	requireManager(manager) {
 		var viewManager;
 
-		// If manager is a string, try to load from register managers,
-		// or require included managers directly
-		if (typeof manager === "string") {
-			// Use global or require
-			viewManager = typeof ePub != "undefined" ? ePub.ViewManagers[manager] : undefined; //require("./managers/"+manager);
+		// If manager is a string, try to load from global registered managers
+		if (typeof manager === "string" && typeof ePub != "undefined") {
+			// Use global
+			viewManager = ePub.ViewManagers[manager];
 		} else {
-			// otherwise, assume we were passed a function
+			// otherwise, assume we were passed a class function
 			viewManager = manager;
 		}
 
@@ -127,17 +168,19 @@ class Rendition {
 	}
 
 	/**
-	 * Require the view from passed string, or as a function
-	 * @param  {string|function} view
+	 * Require the view from passed string, or as a class function
+	 * @param  {string|object} view
 	 * @return {view}
 	 */
 	requireView(view) {
 		var View;
 
-		if (typeof view == "string") {
-			View = typeof ePub != "undefined" ? ePub.Views[view] : undefined; //require("./views/"+view);
+		// If view is a string, try to load from global registered views,
+		if (typeof view == "string" && typeof ePub != "undefined") {
+			// Use global
+			View = ePub.Views[view];
 		} else {
-			// otherwise, assume we were passed a function
+			// otherwise, assume we were passed a class function
 			View = view;
 		}
 
@@ -162,6 +205,8 @@ class Rendition {
 			});
 		}
 
+		this.direction(this.book.package.metadata.direction);
+
 		// Parse metadata to get layout props
 		this.settings.globalLayoutProperties = this.determineLayoutProperties(this.book.package.metadata);
 
@@ -170,16 +215,24 @@ class Rendition {
 		this.layout(this.settings.globalLayoutProperties);
 
 		// Listen for displayed views
-		this.manager.on("added", this.afterDisplayed.bind(this));
+		this.manager.on(EVENTS.MANAGERS.ADDED, this.afterDisplayed.bind(this));
+		this.manager.on(EVENTS.MANAGERS.REMOVED, this.afterRemoved.bind(this));
 
 		// Listen for resizing
-		this.manager.on("resized", this.onResized.bind(this));
+		this.manager.on(EVENTS.MANAGERS.RESIZED, this.onResized.bind(this));
+
+		// Listen for rotation
+		this.manager.on(EVENTS.MANAGERS.ORIENTATION_CHANGE, this.onOrientationChange.bind(this));
 
 		// Listen for scroll changes
-		this.manager.on("scrolled", this.reportLocation.bind(this));
+		this.manager.on(EVENTS.MANAGERS.SCROLLED, this.reportLocation.bind(this));
 
-		// Trigger that rendering has started
-		this.emit("started");
+		/**
+		 * Emit that rendering has started
+		 * @event started
+		 * @memberof Rendition
+		 */
+		this.emit(EVENTS.RENDITION.STARTED);
 
 		// Start processing queue
 		this.starting.resolve();
@@ -201,8 +254,12 @@ class Rendition {
 				"height" : this.settings.height
 			});
 
-			// Trigger Attached
-			this.emit("attached");
+			/**
+			 * Emit that rendering has attached to an element
+			 * @event attached
+			 * @memberof Rendition
+			 */
+			this.emit(EVENTS.RENDITION.ATTACHED);
 
 		}.bind(this));
 
@@ -217,9 +274,10 @@ class Rendition {
 	 * @return {Promise}
 	 */
 	display(target){
-
+		if (this.displaying) {
+			this.displaying.resolve();
+		}
 		return this.q.enqueue(this._display, target);
-
 	}
 
 	/**
@@ -238,9 +296,14 @@ class Rendition {
 		var section;
 		var moveTo;
 
+		this.displaying = displaying;
+
 		// Check if this is a book percentage
-		if (this.book.locations.length && isFloat(target)) {
-			target = this.book.locations.cfiFromPercentage(target);
+		if (this.book.locations.length() &&
+				(isFloat(target) ||
+				(target === "1.0")) // Handle 1.0
+			) {
+			target = this.book.locations.cfiFromPercentage(parseFloat(target));
 		}
 
 		section = this.book.spine.get(target);
@@ -250,12 +313,30 @@ class Rendition {
 			return displayed;
 		}
 
-		return this.manager.display(section, target)
-			.then(function(){
-				this.emit("displayed", section);
-				this.reportLocation();
-			}.bind(this));
+		this.manager.display(section, target)
+			.then(() => {
+				displaying.resolve(section);
+				this.displaying = undefined;
 
+				/**
+				 * Emit that a section has been displayed
+				 * @event displayed
+				 * @param {Section} section
+				 * @memberof Rendition
+				 */
+				this.emit(EVENTS.RENDITION.DISPLAYED, section);
+				this.reportLocation();
+			}, (err) => {
+				/**
+				 * Emit that has been an error displaying
+				 * @event displayError
+				 * @param {Section} section
+				 * @memberof Rendition
+				 */
+				this.emit(EVENTS.RENDITION.DISPLAY_ERROR, err);
+			});
+
+		return displayed;
 	}
 
 	/*
@@ -304,14 +385,50 @@ class Rendition {
 	*/
 
 	/**
-	 * Report what has been displayed
+	 * Report what section has been displayed
 	 * @private
 	 * @param  {*} view
 	 */
 	afterDisplayed(view){
-		this.hooks.content.trigger(view.contents, this);
-		this.emit("rendered", view.section, view);
-		// this.reportLocation();
+
+		view.on(EVENTS.VIEWS.MARK_CLICKED, (cfiRange, data) => this.triggerMarkEvent(cfiRange, data, view));
+
+		this.hooks.render.trigger(view, this)
+			.then(() => {
+				if (view.contents) {
+					this.hooks.content.trigger(view.contents, this).then(() => {
+						/**
+						 * Emit that a section has been rendered
+						 * @event rendered
+						 * @param {Section} section
+						 * @param {View} view
+						 * @memberof Rendition
+						 */
+						this.emit(EVENTS.RENDITION.RENDERED, view.section, view);
+					});
+				} else {
+					this.emit(EVENTS.RENDITION.RENDERED, view.section, view);
+				}
+			});
+
+	}
+
+	/**
+	 * Report what has been removed
+	 * @private
+	 * @param  {*} view
+	 */
+	afterRemoved(view){
+		this.hooks.unloaded.trigger(view, this).then(() => {
+			/**
+			 * Emit that a section has been removed
+			 * @event removed
+			 * @param {Section} section
+			 * @param {View} view
+			 * @memberof Rendition
+			 */
+			this.emit(EVENTS.RENDITION.REMOVED, view.section, view);
+		});
 	}
 
 	/**
@@ -320,15 +437,36 @@ class Rendition {
 	 */
 	onResized(size){
 
-		if(this.location) {
-			this.display(this.location.start);
-		}
-
-		this.emit("resized", {
+		/**
+		 * Emit that the rendition has been resized
+		 * @event resized
+		 * @param {number} width
+		 * @param {height} height
+		 * @memberof Rendition
+		 */
+		this.emit(EVENTS.RENDITION.RESIZED, {
 			width: size.width,
 			height: size.height
 		});
 
+		if (this.location && this.location.start) {
+			this.display(this.location.start.cfi);
+		}
+
+	}
+
+	/**
+	 * Report orientation events and display the last seen location
+	 * @private
+	 */
+	onOrientationChange(orientation){
+		/**
+		 * Emit that the rendition has been rotated
+		 * @event orientationchange
+		 * @param {string} orientation
+		 * @memberof Rendition
+		 */
+		this.emit(EVENTS.RENDITION.ORIENTATION_CHANGE, orientation);
 	}
 
 	/**
@@ -338,6 +476,28 @@ class Rendition {
 	 */
 	moveTo(offset){
 		this.manager.moveTo(offset);
+	}
+
+	/**
+	 * Trigger a resize of the views
+	 * @param {number} [width]
+	 * @param {number} [height]
+	 */
+	resize(width, height){
+		if (width) {
+			this.settings.width = width;
+		}
+		if (height) {
+			this.settings.height = width;
+		}
+		this.manager.resize(width, height);
+	}
+
+	/**
+	 * Clear all rendered views
+	 */
+	clear(){
+		this.manager.clear();
 	}
 
 	/**
@@ -373,9 +533,11 @@ class Rendition {
 		var flow = this.settings.flow || metadata.flow || "auto";
 		var viewport = metadata.viewport || "";
 		var minSpreadWidth = this.settings.minSpreadWidth || metadata.minSpreadWidth || 800;
+		var direction = this.settings.direction || metadata.direction || "ltr";
 
-		if (this.settings.width >= 0 && this.settings.height >= 0) {
-			viewport = "width="+this.settings.width+", height="+this.settings.height+"";
+		if ((this.settings.width === 0 || this.settings.width > 0) &&
+				(this.settings.height === 0 || this.settings.height > 0)) {
+			// viewport = "width="+this.settings.width+", height="+this.settings.height+"";
 		}
 
 		properties = {
@@ -384,19 +546,12 @@ class Rendition {
 			orientation : orientation,
 			flow : flow,
 			viewport : viewport,
-			minSpreadWidth : minSpreadWidth
+			minSpreadWidth : minSpreadWidth,
+			direction: direction
 		};
 
 		return properties;
 	}
-
-	// applyLayoutProperties(){
-	// 	var settings = this.determineLayoutProperties(this.book.package.metadata);
-	//
-	// 	this.flow(settings.flow);
-	//
-	// 	this.layout(settings);
-	// };
 
 	/**
 	 * Adjust the flow of the rendition to paginated or scrolled
@@ -405,7 +560,9 @@ class Rendition {
 	 */
 	flow(flow){
 		var _flow = flow;
-		if (flow === "scrolled-doc" || flow === "scrolled-continuous") {
+		if (flow === "scrolled" ||
+				flow === "scrolled-doc" ||
+				flow === "scrolled-continuous") {
 			_flow = "scrolled";
 		}
 
@@ -413,12 +570,23 @@ class Rendition {
 			_flow = "paginated";
 		}
 
+		this.settings.flow = flow;
+
 		if (this._layout) {
 			this._layout.flow(_flow);
 		}
 
+		if (this.manager && this._layout) {
+			this.manager.applyLayout(this._layout);
+		}
+
 		if (this.manager) {
 			this.manager.updateFlow(_flow);
+		}
+
+		if (this.manager && this.manager.isRendered() && this.location) {
+			this.manager.clear();
+			this.display(this.location.start.cfi);
 		}
 	}
 
@@ -431,7 +599,11 @@ class Rendition {
 			this._layout = new Layout(settings);
 			this._layout.spread(settings.spread, this.settings.minSpreadWidth);
 
-			this.mapping = new Mapping(this._layout.props);
+			// this.mapping = new Mapping(this._layout.props);
+
+			this._layout.on(EVENTS.LAYOUT.UPDATED, (props, changed) => {
+				this.emit(EVENTS.RENDITION.LAYOUT, props, changed);
+			})
 		}
 
 		if (this.manager && this._layout) {
@@ -456,57 +628,175 @@ class Rendition {
 	}
 
 	/**
+	 * Adjust the direction of the rendition
+	 * @param  {string} dir
+	 */
+	direction(dir){
+
+		this.settings.direction = dir || "ltr";
+
+		if (this.manager) {
+			this.manager.direction(this.settings.direction);
+		}
+
+		if (this.manager && this.manager.isRendered() && this.location) {
+			this.manager.clear();
+			this.display(this.location.start.cfi);
+		}
+	}
+
+	/**
 	 * Report the current location
-	 * @private
+	 * @fires relocated
+	 * @fires locationChanged
 	 */
 	reportLocation(){
-		return this.q.enqueue(function(){
-			var location = this.manager.currentLocation();
-			if (location && location.then && typeof location.then === "function") {
-				location.then(function(result) {
-					this.location = result;
+		return this.q.enqueue(function reportedLocation(){
+			requestAnimationFrame(function reportedLocationAfterRAF() {
+				var location = this.manager.currentLocation();
+				if (location && location.then && typeof location.then === "function") {
+					location.then(function(result) {
+						let located = this.located(result);
 
-					this.percentage = this.book.locations.percentageFromCfi(result);
-					if (this.percentage != null) {
-						this.location.percentage = this.percentage;
+						if (!located || !located.start || !located.end) {
+							return;
+						}
+
+						this.location = located;
+
+						this.emit(EVENTS.RENDITION.LOCATION_CHANGED, {
+							index: this.location.start.index,
+							href: this.location.start.href,
+							start: this.location.start.cfi,
+							end: this.location.end.cfi,
+							percentage: this.location.start.percentage
+						});
+
+						this.emit(EVENTS.RENDITION.RELOCATED, this.location);
+					}.bind(this));
+				} else if (location) {
+					let located = this.located(location);
+
+					if (!located || !located.start || !located.end) {
+						return;
 					}
 
-					this.emit("locationChanged", this.location);
-				}.bind(this));
-			} else if (location) {
-				this.location = location;
-				this.percentage = this.book.locations.percentageFromCfi(location);
-				if (this.percentage != null) {
-					this.location.percentage = this.percentage;
+					this.location = located;
+
+					/**
+					 * @event locationChanged
+					 * @deprecated
+					 * @type {object}
+					 * @property {number} index
+					 * @property {string} href
+					 * @property {EpubCFI} start
+					 * @property {EpubCFI} end
+					 * @property {number} percentage
+					 * @memberof Rendition
+					 */
+					this.emit(EVENTS.RENDITION.LOCATION_CHANGED, {
+						index: this.location.start.index,
+						href: this.location.start.href,
+						start: this.location.start.cfi,
+						end: this.location.end.cfi,
+						percentage: this.location.start.percentage
+					});
+
+					/**
+					 * @event relocated
+					 * @type {displayedLocation}
+					 * @memberof Rendition
+					 */
+					this.emit(EVENTS.RENDITION.RELOCATED, this.location);
 				}
-
-				this.emit("locationChanged", this.location);
-			}
-
+			}.bind(this));
 		}.bind(this));
 	}
 
 	/**
-	 * Get the Current Location CFI
-	 * @return {EpubCFI} location (may be a promise)
+	 * Get the Current Location object
+	 * @return {displayedLocation | promise} location (may be a promise)
 	 */
 	currentLocation(){
 		var location = this.manager.currentLocation();
 		if (location && location.then && typeof location.then === "function") {
 			location.then(function(result) {
-				var percentage = this.book.locations.percentageFromCfi(result);
-				if (percentage != null) {
-					result.percentage = percentage;
-				}
-				return result;
+				let located = this.located(result);
+				return located;
 			}.bind(this));
 		} else if (location) {
-			var percentage = this.book.locations.percentageFromCfi(location);
-			if (percentage != null) {
-				location.percentage = percentage;
-			}
-			return location;
+			let located = this.located(location);
+			return located;
 		}
+	}
+
+	/**
+	 * Creates a Rendition#locationRange from location
+	 * passed by the Manager
+	 * @returns {displayedLocation}
+	 * @private
+	 */
+	located(location){
+		if (!location.length) {
+			return {};
+		}
+		let start = location[0];
+		let end = location[location.length-1];
+
+		let located = {
+			start: {
+				index: start.index,
+				href: start.href,
+				cfi: start.mapping.start,
+				displayed: {
+					page: start.pages[0] || 1,
+					total: start.totalPages
+				}
+			},
+			end: {
+				index: end.index,
+				href: end.href,
+				cfi: end.mapping.end,
+				displayed: {
+					page: end.pages[end.pages.length-1] || 1,
+					total: end.totalPages
+				}
+			}
+		};
+
+		let locationStart = this.book.locations.locationFromCfi(start.mapping.start);
+		let locationEnd = this.book.locations.locationFromCfi(end.mapping.end);
+
+		if (locationStart != null) {
+			located.start.location = locationStart;
+			located.start.percentage = this.book.locations.percentageFromLocation(locationStart);
+		}
+		if (locationEnd != null) {
+			located.end.location = locationEnd;
+			located.end.percentage = this.book.locations.percentageFromLocation(locationEnd);
+		}
+
+		let pageStart = this.book.pageList.pageFromCfi(start.mapping.start);
+		let pageEnd = this.book.pageList.pageFromCfi(end.mapping.end);
+
+		if (pageStart != -1) {
+			located.start.page = pageStart;
+		}
+		if (pageEnd != -1) {
+			located.end.page = pageEnd;
+		}
+
+		if (end.index === this.book.spine.last().index &&
+				located.end.displayed.page >= located.end.displayed.total) {
+			located.atEnd = true;
+		}
+
+		if (start.index === this.book.spine.first().index &&
+				located.start.displayed.page === 1) {
+			located.atStart = true;
+		}
+
+		return located;
 	}
 
 	/**
@@ -521,7 +811,7 @@ class Rendition {
 
 		this.book = undefined;
 
-		this.views = null;
+		// this.views = null;
 
 		// this.hooks.display.clear();
 		// this.hooks.serialize.clear();
@@ -543,7 +833,7 @@ class Rendition {
 	}
 
 	/**
-	 * Pass the events from a view
+	 * Pass the events from a view's Contents
 	 * @private
 	 * @param  {View} view
 	 */
@@ -554,8 +844,7 @@ class Rendition {
 			contents.on(e, (ev) => this.triggerViewEvent(ev, contents));
 		});
 
-		contents.on("selected", (e) => this.triggerSelectedEvent(e, contents));
-		contents.on("markClicked", (cfiRange, data) => this.triggerMarkEvent(cfiRange, data, contents));
+		contents.on(EVENTS.CONTENTS.SELECTED, (e) => this.triggerSelectedEvent(e, contents));
 	}
 
 	/**
@@ -573,7 +862,14 @@ class Rendition {
 	 * @param  {EpubCFI} cfirange
 	 */
 	triggerSelectedEvent(cfirange, contents){
-		this.emit("selected", cfirange, contents);
+		/**
+		 * Emit that a text selection has occured
+		 * @event selected
+		 * @param {EpubCFI} cfirange
+		 * @param {Contents} contents
+		 * @memberof Rendition
+		 */
+		this.emit(EVENTS.RENDITION.SELECTED, cfirange, contents);
 	}
 
 	/**
@@ -582,7 +878,15 @@ class Rendition {
 	 * @param  {EpubCFI} cfirange
 	 */
 	triggerMarkEvent(cfiRange, data, contents){
-		this.emit("markClicked", cfiRange, data, contents);
+		/**
+		 * Emit that a mark was clicked
+		 * @event markClicked
+		 * @param {EpubCFI} cfirange
+		 * @param {object} data
+		 * @param {Contents} contents
+		 * @memberof Rendition
+		 */
+		this.emit(EVENTS.RENDITION.MARK_CLICKED, cfiRange, data, contents);
 	}
 
 	/**
@@ -605,7 +909,8 @@ class Rendition {
 
 	/**
 	 * Hook to adjust images to fit in columns
-	 * @param  {View} view
+	 * @param  {Contents} contents
+	 * @private
 	 */
 	adjustImages(contents) {
 
@@ -617,9 +922,14 @@ class Rendition {
 
 		contents.addStylesheetRules({
 			"img" : {
-				"max-width": (this._layout.columnWidth) + "px !important",
-				"max-height": (this._layout.height) + "px !important",
+				"max-width": (this._layout.columnWidth ? this._layout.columnWidth + "px" : "100%") + "!important",
+				"max-height": (this._layout.height ? (this._layout.height * 0.6) + "px" : "60%") + "!important",
 				"object-fit": "contain",
+				"page-break-inside": "avoid"
+			},
+			"svg" : {
+				"max-width": (this._layout.columnWidth ? this._layout.columnWidth + "px" : "100%") + "!important",
+				"max-height": (this._layout.height ? (this._layout.height * 0.6) + "px" : "60%") + "!important",
 				"page-break-inside": "avoid"
 			}
 		});
@@ -632,17 +942,44 @@ class Rendition {
 		});
 	}
 
+	/**
+	 * Get the Contents object of each rendered view
+	 * @returns {Contents[]}
+	 */
 	getContents () {
 		return this.manager ? this.manager.getContents() : [];
 	}
 
-	handleLinks(contents) {
-		contents.on("link", (href) => {
-			let relative = this.book.path.relative(href);
-			this.display(relative);
-		});
+	/**
+	 * Get the views member from the manager
+	 * @returns {Views}
+	 */
+	views () {
+		let views = this.manager ? this.manager.views : undefined;
+		return views || [];
 	}
 
+	/**
+	 * Hook to handle link clicks in rendered content
+	 * @param  {Contents} contents
+	 * @private
+	 */
+	handleLinks(contents) {
+		if (contents) {
+			contents.on(EVENTS.CONTENTS.LINK_CLICKED, (href) => {
+				let relative = this.book.path.relative(href);
+				this.display(relative);
+			});
+		}
+	}
+
+	/**
+	 * Hook to handle injecting stylesheet before
+	 * a Section is serialized
+	 * @param  {document} doc
+	 * @param  {Section} section
+	 * @private
+	 */
 	injectStylesheet(doc, section) {
 		let style = doc.createElement("link");
 		style.setAttribute("type", "text/css");
@@ -651,12 +988,36 @@ class Rendition {
 		doc.getElementsByTagName("head")[0].appendChild(style);
 	}
 
+	/**
+	 * Hook to handle injecting scripts before
+	 * a Section is serialized
+	 * @param  {document} doc
+	 * @param  {Section} section
+	 * @private
+	 */
 	injectScript(doc, section) {
 		let script = doc.createElement("script");
 		script.setAttribute("type", "text/javascript");
 		script.setAttribute("src", this.settings.script);
 		script.textContent = " "; // Needed to prevent self closing tag
 		doc.getElementsByTagName("head")[0].appendChild(script);
+	}
+
+	/**
+	 * Hook to handle the document identifier before
+	 * a Section is serialized
+	 * @param  {document} doc
+	 * @param  {Section} section
+	 * @private
+	 */
+	injectIdentifier(doc, section) {
+		let ident = this.book.package.metadata.identifier;
+		let meta = doc.createElement("meta");
+		meta.setAttribute("name", "dc.relation.ispartof");
+		if (ident) {
+			meta.setAttribute("content", ident);
+		}
+		doc.getElementsByTagName("head")[0].appendChild(meta);
 	}
 
 }

@@ -1,6 +1,7 @@
 import {qs, sprint, locationOf, defer} from "./utils/core";
 import Queue from "./utils/queue";
 import EpubCFI from "./epubcfi";
+import { EVENTS } from "./utils/constants";
 import EventEmitter from "event-emitter";
 
 /**
@@ -43,13 +44,13 @@ class Locations {
 		this.q.pause();
 
 		this.spine.each(function(section) {
-
-			this.q.enqueue(this.process.bind(this), section);
-
+			if (section.linear) {
+				this.q.enqueue(this.process.bind(this), section);
+			}
 		}.bind(this));
 
 		return this.q.run().then(function() {
-			this.total = this._locations.length-1;
+			this.total = this._locations.length - 1;
 
 			if (this._currentCfi) {
 				this.currentLocation = this._currentCfi;
@@ -119,15 +120,31 @@ class Locations {
 				pos = len;
 			}
 
+
 			while (pos < len) {
-				// counter = this.break;
-				pos += dist;
+				dist = _break - counter;
+
+				if (counter === 0) {
+					// Start new range
+					pos += 1;
+					range = this.createRange();
+					range.startContainer = node;
+					range.startOffset = pos;
+				}
+
+				// pos += dist;
+
 				// Gone over
-				if(pos >= len){
+				if(pos + dist >= len){
 					// Continue counter for next node
-					counter = len - (pos - _break);
+					counter += len - pos;
+					// break
+					pos = len;
 				// At End
 				} else {
+					// Advance pos
+					pos += dist;
+
 					// End the previous range
 					range.endContainer = node;
 					range.endOffset = pos;
@@ -135,14 +152,6 @@ class Locations {
 					let cfi = new EpubCFI(range, cfiBase).toString();
 					locations.push(cfi);
 					counter = 0;
-
-					// Start new range
-					pos += 1;
-					range = this.createRange();
-					range.startContainer = node;
-					range.startOffset = pos;
-
-					dist = _break;
 				}
 			}
 			prev = node;
@@ -154,7 +163,6 @@ class Locations {
 		if (range && range.startContainer && prev) {
 			range.endContainer = prev;
 			range.endOffset = prev.length;
-			// cfi = section.cfiFromRange(range);
 			let cfi = new EpubCFI(range, cfiBase).toString();
 			locations.push(cfi);
 			counter = 0;
@@ -163,14 +171,35 @@ class Locations {
 		return locations;
 	}
 
+	/**
+	 * Get a location from an EpubCFI
+	 * @param {EpubCFI} cfi
+	 * @return {number}
+	 */
 	locationFromCfi(cfi){
+		let loc;
+		if (EpubCFI.prototype.isCfiString(cfi)) {
+			cfi = new EpubCFI(cfi);
+		}
 		// Check if the location has not been set yet
 		if(this._locations.length === 0) {
 			return -1;
 		}
-		return locationOf(cfi.start, this._locations, this.epubcfi.compare);
+
+		loc = locationOf(cfi, this._locations, this.epubcfi.compare);
+
+		if (loc > this.total) {
+			return this.total;
+		}
+
+		return loc;
 	}
 
+	/**
+	 * Get a percentage position in locations from an EpubCFI
+	 * @param {EpubCFI} cfi
+	 * @return {number}
+	 */
 	percentageFromCfi(cfi) {
 		if(this._locations.length === 0) {
 			return null;
@@ -181,13 +210,24 @@ class Locations {
 		return this.percentageFromLocation(loc);
 	}
 
+	/**
+	 * Get a percentage position from a location index
+	 * @param {number} location
+	 * @return {number}
+	 */
 	percentageFromLocation(loc) {
 		if (!loc || !this.total) {
 			return 0;
 		}
+
 		return (loc / this.total);
 	}
 
+	/**
+	 * Get an EpubCFI from location index
+	 * @param {number} loc
+	 * @return {EpubCFI} cfi
+	 */
 	cfiFromLocation(loc){
 		var cfi = -1;
 		// check that pg is an int
@@ -202,24 +242,51 @@ class Locations {
 		return cfi;
 	}
 
-	cfiFromPercentage(value){
-		var percentage = (value > 1) ? value / 100 : value; // Normalize value to 0-1
-		var loc = Math.ceil(this.total * percentage);
+	/**
+	 * Get an EpubCFI from location percentage
+	 * @param {number} percentage
+	 * @return {EpubCFI} cfi
+	 */
+	cfiFromPercentage(percentage){
+		let loc;
+		if (percentage > 1) {
+			console.warn("Normalize cfiFromPercentage value to between 0 - 1");
+		}
 
+		// Make sure 1 goes to very end
+		if (percentage >= 1) {
+			let cfi = new EpubCFI(this._locations[this.total]);
+			cfi.collapse();
+			return cfi.toString();
+		}
+
+		loc = Math.ceil(this.total * percentage);
 		return this.cfiFromLocation(loc);
 	}
 
+	/**
+	 * Load locations from JSON
+	 * @param {json} locations
+	 */
 	load(locations){
-		this._locations = JSON.parse(locations);
-		this.total = this._locations.length-1;
+		if (typeof locations === "string") {
+			this._locations = JSON.parse(locations);
+		} else {
+			this._locations = locations;
+		}
+		this.total = this._locations.length - 1;
 		return this._locations;
 	}
 
-	save(json){
+	/**
+	 * Save locations to JSON
+	 * @return {json}
+	 */
+	save(){
 		return JSON.stringify(this._locations);
 	}
 
-	getCurrent(json){
+	getCurrent(){
 		return this._current;
 	}
 
@@ -245,19 +312,28 @@ class Locations {
 			loc = curr;
 		}
 
-		this.emit("changed", {
+		this.emit(EVENTS.LOCATIONS.CHANGED, {
 			percentage: this.percentageFromLocation(loc)
 		});
 	}
 
+	/**
+	 * Get the current location
+	 */
 	get currentLocation() {
 		return this._current;
 	}
 
+	/**
+	 * Set the current location
+	 */
 	set currentLocation(curr) {
 		this.setCurrent(curr);
 	}
 
+	/**
+	 * Locations length
+	 */
 	length () {
 		return this._locations.length;
 	}
@@ -267,7 +343,7 @@ class Locations {
 		this.request = undefined;
 		this.pause = undefined;
 
-		this.q.clear();
+		this.q.stop();
 		this.q = undefined;
 		this.epubcfi = undefined;
 

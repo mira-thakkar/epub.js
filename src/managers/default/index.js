@@ -1,9 +1,10 @@
 import EventEmitter from "event-emitter";
-import {extend, defer} from "../../utils/core";
+import {extend, defer, windowBounds, isNumber} from "../../utils/core";
 import Mapping from "../../mapping";
 import Queue from "../../utils/queue";
 import Stage from "../helpers/stage";
 import Views from "../helpers/views";
+import { EVENTS } from "../../utils/constants";
 
 class DefaultViewManager {
 	constructor(options) {
@@ -19,9 +20,8 @@ class DefaultViewManager {
 			hidden: false,
 			width: undefined,
 			height: undefined,
-			// globalLayoutProperties : { layout: "reflowable", spread: "auto", orientation: "auto"},
-			// layout: null,
-			axis: "vertical",
+			axis: undefined,
+			flow: "scrolled",
 			ignoreClass: ""
 		});
 
@@ -30,23 +30,42 @@ class DefaultViewManager {
 		this.viewSettings = {
 			ignoreClass: this.settings.ignoreClass,
 			axis: this.settings.axis,
+			flow: this.settings.flow,
 			layout: this.layout,
+			method: this.settings.method, // srcdoc, blobUrl, write
 			width: 0,
 			height: 0,
-			globalOptions: extend({}, options.settings, {disableSrcdoc: options.settings.disableSrcdoc || false})
+			forceEvenPages: true
 		};
+
+		this.rendered = false;
 
 	}
 
 	render(element, size){
+		let tag = element.tagName;
+
+		if (tag && (tag.toLowerCase() == "body" ||
+				tag.toLowerCase() == "html")) {
+  			this.fullsize = true;
+		}
+
+		if (this.fullsize) {
+			this.settings.overflow = "visible";
+			this.overflow = this.settings.overflow;
+		}
+
+		this.settings.size = size;
 
 		// Save the stage
 		this.stage = new Stage({
 			width: size.width,
 			height: size.height,
-			overflow: this.settings.overflow,
+			overflow: this.overflow,
 			hidden: this.settings.hidden,
-			axis: this.settings.axis
+			axis: this.settings.axis,
+			fullsize: this.fullsize,
+			direction: this.settings.direction
 		});
 
 		this.stage.attachTo(element);
@@ -69,6 +88,8 @@ class DefaultViewManager {
 		// Will only attach if width and height are both fixed.
 		this.stage.onResize(this.onResized.bind(this));
 
+		this.stage.onOrientationChange(this.onOrientationChange.bind(this));
+
 		// Add Event Listeners
 		this.addEventListeners();
 
@@ -77,6 +98,9 @@ class DefaultViewManager {
 		if (this.layout) {
 			this.updateLayout();
 		}
+
+		this.rendered = true;
+
 	}
 
 	addEventListeners(){
@@ -86,7 +110,7 @@ class DefaultViewManager {
 			this.destroy();
 		}.bind(this));
 
-		if(this.settings.height) {
+		if(!this.fullsize) {
 			scroller = this.container;
 		} else {
 			scroller = window;
@@ -98,7 +122,7 @@ class DefaultViewManager {
 	removeEventListeners(){
 		var scroller;
 
-		if(this.settings.height) {
+		if(!this.fullsize) {
 			scroller = this.container;
 		} else {
 			scroller = window;
@@ -108,14 +132,17 @@ class DefaultViewManager {
 	}
 
 	destroy(){
+		clearTimeout(this.orientationTimeout);
+		clearTimeout(this.resizeTimeout);
+		clearTimeout(this.afterScrolled);
+
+		this.clear();
 
 		this.removeEventListeners();
 
-		this.views.each(function(view){
-			view.destroy();
-		});
-
 		this.stage.destroy();
+
+		this.rendered = false;
 
 		/*
 
@@ -128,19 +155,55 @@ class DefaultViewManager {
 		*/
 	}
 
-	onResized(e) {
-		clearTimeout(this.resizeTimeout);
-		this.resizeTimeout = setTimeout(function(){
+	onOrientationChange(e) {
+		let {orientation} = window;
+
+		this.resize();
+
+		// Per ampproject:
+		// In IOS 10.3, the measured size of an element is incorrect if the
+		// element size depends on window size directly and the measurement
+		// happens in window.resize event. Adding a timeout for correct
+		// measurement. See https://github.com/ampproject/amphtml/issues/8479
+		clearTimeout(this.orientationTimeout);
+		this.orientationTimeout = setTimeout(function(){
+			this.orientationTimeout = undefined;
 			this.resize();
-		}.bind(this), 150);
+			this.emit(EVENTS.MANAGERS.ORIENTATION_CHANGE, orientation);
+		}.bind(this), 500);
+
+	}
+
+	onResized(e) {
+		this.resize();
 	}
 
 	resize(width, height){
-		// Clear the queue
-		this.q.clear();
+		let stageSize = this.stage.size(width, height);
 
-		this._stageSize = this.stage.size(width, height);
+		// For Safari, wait for orientation to catch up
+		// if the window is a square
+		this.winBounds = windowBounds();
+		if (this.orientationTimeout &&
+				this.winBounds.width === this.winBounds.height) {
+			// reset the stage size for next resize
+			this._stageSize = undefined;
+			return;
+		}
+
+		if (this._stageSize &&
+				this._stageSize.width === stageSize.width &&
+				this._stageSize.height === stageSize.height ) {
+			// Size is the same, no need to resize
+			return;
+		}
+
+		this._stageSize = stageSize;
+
 		this._bounds = this.bounds();
+
+		// Clear current views
+		this.clear();
 
 		// Update for new views
 		this.viewSettings.width = this._stageSize.width;
@@ -148,17 +211,10 @@ class DefaultViewManager {
 
 		this.updateLayout();
 
-		// Update for existing views
-		this.views.each(function(view) {
-			view.size(this._stageSize.width, this._stageSize.height);
-		}.bind(this));
-
-
-		this.emit("resized", {
-			width: this.stage.width,
-			height: this.stage.height
+		this.emit(EVENTS.MANAGERS.RESIZED, {
+			width: this._stageSize.width,
+			height: this._stageSize.height
 		});
-
 	}
 
 	createView(section) {
@@ -170,13 +226,30 @@ class DefaultViewManager {
 		var displaying = new defer();
 		var displayed = displaying.promise;
 
+		// Check if moving to target is needed
+		if (target === section.href || isNumber(target)) {
+			target = undefined;
+		}
+
 		// Check to make sure the section we want isn't already shown
 		var visible = this.views.find(section);
 
-		// View is already shown, just move to correct location
-		if(visible && target) {
-			let offset = visible.locationOf(target);
-			this.moveTo(offset);
+		// View is already shown, just move to correct location in view
+		if(visible && section) {
+			let offset = visible.offset();
+
+			if (this.settings.direction === "ltr") {
+				this.scrollTo(offset.left, offset.top, true);
+			} else {
+				let width = visible.width();
+				this.scrollTo(offset.left + width, offset.top, true);
+			}
+
+			if(target) {
+				let offset = visible.locationOf(target);
+				this.moveTo(offset);
+			}
+
 			displaying.resolve();
 			return displayed;
 		}
@@ -193,7 +266,9 @@ class DefaultViewManager {
 					this.moveTo(offset);
 				}
 
-			}.bind(this))
+			}.bind(this), (err) => {
+				displaying.reject(err);
+			})
 			.then(function(){
 				var next;
 				if (this.layout.name === "pre-paginated" &&
@@ -221,22 +296,18 @@ class DefaultViewManager {
 	}
 
 	afterDisplayed(view){
-		this.emit("added", view);
+		this.emit(EVENTS.MANAGERS.ADDED, view);
 	}
 
 	afterResized(view){
-		this.emit("resize", view.section);
+		this.emit(EVENTS.MANAGERS.RESIZE, view.section);
 	}
-
-	// moveTo(offset){
-	// 	this.scrollTo(offset.left, offset.top);
-	// };
 
 	moveTo(offset){
 		var distX = 0,
 			  distY = 0;
 
-		if(this.settings.axis === "vertical") {
+		if(!this.isPaginated) {
 			distY = offset.top;
 		} else {
 			distX = Math.floor(offset.left / this.layout.delta) * this.layout.delta;
@@ -245,7 +316,6 @@ class DefaultViewManager {
 				distX = this.container.scrollWidth - this.layout.delta;
 			}
 		}
-
 		this.scrollTo(distX, distY, true);
 	}
 
@@ -254,9 +324,13 @@ class DefaultViewManager {
 
 		this.views.append(view);
 
-		// view.on("shown", this.afterDisplayed.bind(this));
+		// view.on(EVENTS.VIEWS.SHOWN, this.afterDisplayed.bind(this));
 		view.onDisplayed = this.afterDisplayed.bind(this);
 		view.onResize = this.afterResized.bind(this);
+
+		view.on(EVENTS.VIEWS.AXIS, (axis) => {
+			this.updateAxis(axis);
+		});
 
 		return view.display(this.request);
 
@@ -269,19 +343,41 @@ class DefaultViewManager {
 		view.onDisplayed = this.afterDisplayed.bind(this);
 		view.onResize = this.afterResized.bind(this);
 
+		view.on(EVENTS.VIEWS.AXIS, (axis) => {
+			this.updateAxis(axis);
+		});
+
 		return view.display(this.request);
 	}
 
 	prepend(section){
 		var view = this.createView(section);
 
+		view.on(EVENTS.VIEWS.RESIZED, (bounds) => {
+			this.counter(bounds);
+		});
+
 		this.views.prepend(view);
 
 		view.onDisplayed = this.afterDisplayed.bind(this);
 		view.onResize = this.afterResized.bind(this);
 
+		view.on(EVENTS.VIEWS.AXIS, (axis) => {
+			this.updateAxis(axis);
+		});
+
 		return view.display(this.request);
 	}
+
+	counter(bounds){
+		if(this.settings.axis === "vertical") {
+			this.scrollBy(0, bounds.heightDelta, true);
+		} else {
+			this.scrollBy(bounds.widthDelta, 0, true);
+		}
+
+	}
+
 	// resizeView(view) {
 	//
 	// 	if(this.settings.globalLayoutProperties.layout === "pre-paginated") {
@@ -296,22 +392,45 @@ class DefaultViewManager {
 		var next;
 		var left;
 
+		let dir = this.settings.direction;
+
 		if(!this.views.length) return;
 
-		if(this.settings.axis === "horizontal") {
+		if(this.isPaginated && this.settings.axis === "horizontal" && (!dir || dir === "ltr")) {
 
 			this.scrollLeft = this.container.scrollLeft;
 
 			left = this.container.scrollLeft + this.container.offsetWidth + this.layout.delta;
 
-			if(left < this.container.scrollWidth) {
+			if(left <= this.container.scrollWidth) {
 				this.scrollBy(this.layout.delta, 0, true);
-			} else if (left - this.layout.columnWidth === this.container.scrollWidth) {
-				this.scrollTo(this.container.scrollWidth - this.layout.delta, 0, true);
-				next = this.views.last().section.next();
 			} else {
 				next = this.views.last().section.next();
 			}
+		} else if (this.isPaginated && this.settings.axis === "horizontal" && dir === "rtl") {
+
+			this.scrollLeft = this.container.scrollLeft;
+
+			left = this.container.scrollLeft;
+
+			if(left > 0) {
+				this.scrollBy(this.layout.delta, 0, true);
+			} else {
+				next = this.views.last().section.next();
+			}
+
+		} else if (this.isPaginated && this.settings.axis === "vertical") {
+
+			this.scrollTop = this.container.scrollTop;
+
+			let top  = this.container.scrollTop + this.container.offsetHeight;
+
+			if(top < this.container.scrollHeight) {
+				this.scrollBy(0, this.layout.height, true);
+			} else {
+				next = this.views.last().section.next();
+			}
+
 		} else {
 			next = this.views.last().section.next();
 		}
@@ -328,7 +447,9 @@ class DefaultViewManager {
 							return this.append(right);
 						}
 					}
-				}.bind(this))
+				}.bind(this), (err) => {
+					displaying.reject(err);
+				})
 				.then(function(){
 					this.views.show();
 				}.bind(this));
@@ -340,10 +461,11 @@ class DefaultViewManager {
 	prev(){
 		var prev;
 		var left;
+		let dir = this.settings.direction;
 
 		if(!this.views.length) return;
 
-		if(this.settings.axis === "horizontal") {
+		if(this.isPaginated && this.settings.axis === "horizontal" && (!dir || dir === "ltr")) {
 
 			this.scrollLeft = this.container.scrollLeft;
 
@@ -355,6 +477,29 @@ class DefaultViewManager {
 				prev = this.views.first().section.prev();
 			}
 
+		} else if (this.isPaginated && this.settings.axis === "horizontal" && dir === "rtl") {
+
+			this.scrollLeft = this.container.scrollLeft;
+
+			left = this.container.scrollLeft + this.container.offsetWidth + this.layout.delta;
+
+			if(left <= this.container.scrollWidth) {
+				this.scrollBy(-this.layout.delta, 0, true);
+			} else {
+				prev = this.views.first().section.prev();
+			}
+
+		} else if (this.isPaginated && this.settings.axis === "vertical") {
+
+			this.scrollTop = this.container.scrollTop;
+
+			let top = this.container.scrollTop;
+
+			if(top > 0) {
+				this.scrollBy(0, -(this.layout.height), true);
+			} else {
+				prev = this.views.first().section.prev();
+			}
 
 		} else {
 
@@ -374,10 +519,16 @@ class DefaultViewManager {
 							return this.prepend(left);
 						}
 					}
-				}.bind(this))
+				}.bind(this), (err) => {
+					displaying.reject(err);
+				})
 				.then(function(){
-					if(this.settings.axis === "horizontal") {
-						this.scrollTo(this.container.scrollWidth - this.layout.delta, 0, true);
+					if(this.isPaginated && this.settings.axis === "horizontal") {
+						if (this.settings.direction === "rtl") {
+							this.scrollTo(0, 0, true);
+						} else {
+							this.scrollTo(this.container.scrollWidth - this.layout.delta, 0, true);
+						}
 					}
 					this.views.show();
 				}.bind(this));
@@ -394,9 +545,14 @@ class DefaultViewManager {
 	}
 
 	clear () {
-		this.views.hide();
-		this.scrollTo(0,0, true);
-		this.views.clear();
+
+		// this.q.clear();
+
+		if (this.views) {
+			this.views.hide();
+			this.scrollTo(0,0, true);
+			this.views.clear();
+		}
 	}
 
 	currentLocation(){
@@ -409,96 +565,121 @@ class DefaultViewManager {
 		return this.location;
 	}
 
-	scrolledLocation(){
+	scrolledLocation() {
+		let visible = this.visible();
+		let container = this.container.getBoundingClientRect();
+		let pageHeight = (container.height < window.innerHeight) ? container.height : window.innerHeight;
 
-		var visible = this.visible();
-		var startPage, endPage;
-		var startA, startB, endA, endB;
-		var last;
-		var container = this.container.getBoundingClientRect();
-		var pageHeight = (container.height < window.innerHeight) ? container.height : window.innerHeight;
-		var offset = 0;
+		let offset = 0;
+		let used = 0;
 
-		if(!this.settings.height) {
+		if(this.fullsize) {
 			offset = window.scrollY;
 		}
 
-		if(visible.length === 1) {
-			startA = (container.top - visible[0].position().top) + offset;
-			endA = startA + pageHeight;
-			startPage = this.mapping.page(visible[0].contents, visible[0].section.cfiBase, startA, endA)
+		let sections = visible.map((view) => {
+			let {index, href} = view.section;
+			let position = view.position();
+			let height = view.height();
+
+			let startPos = offset + container.top - position.top + used;
+			let endPos = startPos + pageHeight - used;
+			if (endPos > height) {
+				endPos = height;
+				used = (endPos - startPos);
+			}
+
+			let totalPages = this.layout.count(height, pageHeight).pages;
+
+			let currPage = Math.ceil(startPos / pageHeight);
+			let pages = [];
+			let endPage = Math.ceil(endPos / pageHeight);
+
+			pages = [];
+			for (var i = currPage; i <= endPage; i++) {
+				let pg = i + 1;
+				pages.push(pg);
+			}
+
+			let mapping = this.mapping.page(view.contents, view.section.cfiBase, startPos, endPos);
 
 			return {
-				index : visible[0].section.index,
-				href : visible[0].section.href,
-				start: startPage.start,
-				end: startPage.end
-			};
-		}
+				index,
+				href,
+				pages,
+				totalPages,
+				mapping
+			}
+		});
 
-		if(visible.length > 1) {
-			last = visible.length - 1;
-
-			startA = (container.top - visible[0].position().top) + offset;
-			endA = startA + (container.top - visible[0].position().bottom);
-
-			startB = (container.top - visible[last].position().top) + offset;
-			endB = pageHeight - startB;
-
-			startPage = this.mapping.page(visible[0].contents, visible[0].section.cfiBase, startA, endA)
-			endPage = this.mapping.page(visible[last].contents, visible[last].section.cfiBase, startB, endB);
-
-			return {
-				index : visible[last].section.index,
-				href : visible[last].section.href,
-				start: startPage.start,
-				end: endPage.end
-			};
-		}
-
+		return sections;
 	}
 
 	paginatedLocation(){
-		var visible = this.visible();
-		var startA, startB, endA, endB;
-		var pageLeft, pageRight;
-		var container = this.container.getBoundingClientRect();
-		var last;
+		let visible = this.visible();
+		let container = this.container.getBoundingClientRect();
 
-		if(visible.length === 1) {
-			startA = container.left - visible[0].position().left;
-			endA = startA + this.layout.spreadWidth + this.layout.gap;
+		let left = 0;
+		let used = 0;
 
-			pageLeft = this.mapping.page(visible[0].contents, visible[0].section.cfiBase, startA, endA)
-			return {
-				index : visible[0].section.index,
-				href : visible[0].section.href,
-				start: pageLeft.start,
-				end: pageLeft.end
-			};
+		if(this.fullsize) {
+			left = window.scrollX;
 		}
 
-		if(visible.length > 1) {
-			last = visible.length - 1;
+		let sections = visible.map((view) => {
+			let {index, href} = view.section;
+			let offset = view.offset().left;
+			let position = view.position().left;
+			let width = view.width();
 
-			// Left Col
-			startA = container.left - visible[0].position().left;
-			endA = startA + this.layout.columnWidth + this.layout.gap / 2;
+			// Find mapping
+			let start = left + container.left - position + used;
+			let end = start + this.layout.width - used;
 
-			// Right Col
-			startB = container.left + this.layout.spreadWidth - visible[last].position().left;
-			endB = startB + this.layout.columnWidth + this.layout.gap / 2;
+			let mapping = this.mapping.page(view.contents, view.section.cfiBase, start, end);
 
-			pageLeft = this.mapping.page(visible[0].contents, visible[0].section.cfiBase, startA, endA);
-			pageRight = this.mapping.page(visible[last].contents, visible[last].section.cfiBase, startB, endB);
+			// Find displayed pages
+			//console.log("pre", end, offset + width);
+			// if (end > offset + width) {
+			// 	end = offset + width;
+			// 	used = this.layout.pageWidth;
+			// }
+			// console.log("post", end);
+
+			let totalPages = this.layout.count(width).pages;
+			let startPage = Math.floor(start / this.layout.pageWidth);
+			let pages = [];
+			let endPage = Math.floor(end / this.layout.pageWidth);
+
+			// start page should not be negative
+			if (startPage < 0) {
+				startPage = 0;
+				endPage = endPage + 1;
+			}
+
+			// Reverse page counts for rtl
+			if (this.settings.direction === "rtl") {
+				let tempStartPage = startPage;
+				startPage = totalPages - endPage;
+				endPage = totalPages - tempStartPage;
+			}
+
+
+			for (var i = startPage + 1; i <= endPage; i++) {
+				let pg = i;
+				pages.push(pg);
+			}
 
 			return {
-				index : visible[last].section.index,
-				href : visible[last].section.href,
-				start: pageLeft.start,
-				end: pageRight.end
-			};
-		}
+				index,
+				href,
+				pages,
+				totalPages,
+				mapping
+			}
+		});
+
+		return sections;
 	}
 
 	isVisible(view, offsetPrev, offsetNext, _container){
@@ -543,17 +724,17 @@ class DefaultViewManager {
 	}
 
 	scrollBy(x, y, silent){
+		let dir = this.settings.direction === "rtl" ? -1 : 1;
+
 		if(silent) {
 			this.ignore = true;
 		}
 
-		if(this.settings.height) {
-
-			if(x) this.container.scrollLeft += x;
+		if(!this.fullsize) {
+			if(x) this.container.scrollLeft += x * dir;
 			if(y) this.container.scrollTop += y;
-
 		} else {
-			window.scrollBy(x,y);
+			window.scrollBy(x * dir, y * dir);
 		}
 		this.scrolled = true;
 	}
@@ -563,27 +744,20 @@ class DefaultViewManager {
 			this.ignore = true;
 		}
 
-		if(this.settings.height) {
+		if(!this.fullsize) {
 			this.container.scrollLeft = x;
 			this.container.scrollTop = y;
 		} else {
 			window.scrollTo(x,y);
 		}
 		this.scrolled = true;
-
-		// if(this.container.scrollLeft != x){
-		//   setTimeout(function() {
-		//     this.scrollTo(x, y, silent);
-		//   }.bind(this), 10);
-		//   return;
-		// };
 	}
 
 	onScroll(){
 		let scrollTop;
 		let scrollLeft;
 
-		if(this.settings.height) {
+		if(!this.fullsize) {
 			scrollTop = this.container.scrollTop;
 			scrollLeft = this.container.scrollLeft;
 		} else {
@@ -595,14 +769,14 @@ class DefaultViewManager {
 		this.scrollLeft = scrollLeft;
 
 		if(!this.ignore) {
-			this.emit("scroll", {
+			this.emit(EVENTS.MANAGERS.SCROLL, {
 				top: scrollTop,
 				left: scrollLeft
 			});
 
 			clearTimeout(this.afterScrolled);
 			this.afterScrolled = setTimeout(function () {
-				this.emit("scrolled", {
+				this.emit(EVENTS.MANAGERS.SCROLLED, {
 					top: this.scrollTop,
 					left: this.scrollLeft
 				});
@@ -628,19 +802,18 @@ class DefaultViewManager {
 
 		this.layout = layout;
 		this.updateLayout();
-
-		this.mapping = new Mapping(this.layout.props);
 		 // this.manager.layout(this.layout.format);
 	}
 
 	updateLayout() {
+
 		if (!this.stage) {
 			return;
 		}
 
 		this._stageSize = this.stage.size();
 
-		if(this.settings.axis === "vertical") {
+		if(!this.isPaginated) {
 			this.layout.calculate(this._stageSize.width, this._stageSize.height);
 		} else {
 			this.layout.calculate(
@@ -652,7 +825,7 @@ class DefaultViewManager {
 			// Set the look ahead offset for what is visible
 			this.settings.offset = this.layout.delta;
 
-			this.stage.addStyleRules("iframe", [{"margin-right" : this.layout.gap + "px"}]);
+			// this.stage.addStyleRules("iframe", [{"margin-right" : this.layout.gap + "px"}]);
 
 		}
 
@@ -661,43 +834,105 @@ class DefaultViewManager {
 		this.viewSettings.height = this.layout.height;
 
 		this.setLayout(this.layout);
-
 	}
 
 	setLayout(layout){
 
 		this.viewSettings.layout = layout;
 
+		this.mapping = new Mapping(layout.props, this.settings.direction, this.settings.axis);
+
 		if(this.views) {
 
-			this.views.each(function(view){
-				view.setLayout(layout);
+			this.views.forEach(function(view){
+				if (view) {
+					view.setLayout(layout);
+				}
 			});
 
 		}
 
 	}
 
-	updateFlow(flow){
-		var axis = (flow === "paginated") ? "horizontal" : "vertical";
+	updateAxis(axis, forceUpdate){
+
+		if (!this.isPaginated) {
+			axis = "vertical";
+		}
+
+		if (!forceUpdate && axis === this.settings.axis) {
+			return;
+		}
 
 		this.settings.axis = axis;
 
+		this.stage && this.stage.axis(axis);
+
 		this.viewSettings.axis = axis;
 
-		this.settings.overflow = (flow === "paginated") ? "hidden" : "auto";
-		// this.views.each(function(view){
+		if (this.mapping) {
+			this.mapping = new Mapping(this.layout.props, this.settings.direction, this.settings.axis);
+		}
+
+		if (this.layout && axis === "vertical") {
+			this.layout.spread("none");
+		} else {
+			this.layout.spread(this.layout.settings.spread);
+		}
+	}
+
+	updateFlow(flow){
+		let isPaginated = (flow === "paginated" || flow === "auto");
+
+		this.isPaginated = isPaginated;
+
+		if (flow === "scrolled-doc" ||
+				flow === "scrolled-continuous" ||
+				flow === "scrolled") {
+			this.updateAxis("vertical");
+		}
+
+		this.viewSettings.flow = flow;
+
+		if (!this.settings.overflow) {
+			this.overflow = isPaginated ? "hidden" : "auto";
+		} else {
+			this.overflow = this.settings.overflow;
+		}
+		// this.views.forEach(function(view){
 		// 	view.setAxis(axis);
 		// });
+
+		this.updateLayout();
 
 	}
 
 	getContents(){
 		var contents = [];
-		this.views.each(function(view){
-			contents.push(view.contents);
+		if (!this.views) {
+			return contents;
+		}
+		this.views.forEach(function(view){
+			const viewContents = view && view.contents;
+			if (viewContents) {
+				contents.push(viewContents);
+			}
 		});
 		return contents;
+	}
+
+	direction(dir="ltr") {
+		this.settings.direction = dir;
+
+		this.stage && this.stage.direction(dir);
+
+		this.viewSettings.direction = dir;
+
+		this.updateLayout();
+	}
+
+	isRendered() {
+		return this.rendered;
 	}
 }
 

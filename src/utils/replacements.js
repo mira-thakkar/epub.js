@@ -5,13 +5,13 @@ import Path from "./path";
 export function replaceBase(doc, section){
 	var base;
 	var head;
+	var url = section.url;
+	var absolute = (url.indexOf("://") > -1);
 
 	if(!doc){
 		return;
 	}
 
-	// head = doc.querySelector("head");
-	// base = head.querySelector("base");
 	head = qs(doc, "head");
 	base = qs(head, "base");
 
@@ -20,13 +20,18 @@ export function replaceBase(doc, section){
 		head.insertBefore(base, head.firstChild);
 	}
 
-	base.setAttribute("href", section.url);
+	// Fix for Safari crashing if the url doesn't have an origin
+	if (!absolute && window && window.location) {
+		url = window.location.origin + url;
+	}
+
+	base.setAttribute("href", url);
 }
 
 export function replaceCanonical(doc, section){
 	var head;
 	var link;
-	var url = section.url; // window.location.origin +  window.location.pathname + "?loc=" + encodeURIComponent(section.url);
+	var url = section.canonical;
 
 	if(!doc){
 		return;
@@ -44,6 +49,28 @@ export function replaceCanonical(doc, section){
 		head.appendChild(link);
 	}
 }
+
+export function replaceMeta(doc, section){
+	var head;
+	var meta;
+	var id = section.idref;
+	if(!doc){
+		return;
+	}
+
+	head = qs(doc, "head");
+	meta = qs(head, "link[property='dc.identifier']");
+
+	if (meta) {
+		meta.setAttribute("content", id);
+	} else {
+		meta = doc.createElement("meta");
+		meta.setAttribute("name", "dc.identifier");
+		meta.setAttribute("content", id);
+		head.appendChild(meta);
+	}
+}
+
 // TODO: move me to Contents
 export function replaceLinks(contents, fn) {
 

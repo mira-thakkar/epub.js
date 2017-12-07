@@ -26,7 +26,7 @@ module.exports = function(config) {
 
       // {pattern: 'node_modules/es6-promise/dist/es6-promise.auto.js', watched: false, included: true, served: true},
 
-      {pattern: 'libs/url/url.js', watched: false, included: true, served: true}
+      {pattern: 'libs/url/url-polyfill.js', watched: false, included: true, served: true}
 
     ],
 
@@ -100,7 +100,7 @@ module.exports = function(config) {
 
     // start these browsers
     // available browser launchers: https://npmjs.org/browse/keyword/karma-launcher
-    browsers: ['PhantomJS'],
+    browsers: ['ChromeHeadless'],
 
 
     // Continuous Integration mode

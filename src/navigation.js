@@ -1,4 +1,4 @@
-import {qs, qsa, querySelectorByType} from "./utils/core";
+import {qs, qsa, querySelectorByType, filterChildren, getParentByTagName} from "./utils/core";
 
 /**
  * Navigation Parser
@@ -9,21 +9,22 @@ class Navigation {
 		this.toc = [];
 		this.tocByHref = {};
 		this.tocById = {};
-
+		this.landmarks = [];
+		this.landmarksByType = {};
+		this.length = 0;
 		if (xml) {
 			this.parse(xml);
 		}
 	}
 
-	/**
-	 * Parse out the navigation items
-	 * @param {document} xml navigation html / xhtml / ncx
-	 */
+  /**
+   * Parse out the navigation items
+   * @param {document} xml navigation html / xhtml / ncx
+   */
 	parse(xml) {
 		let isXml = xml.nodeType;
 		let html;
 		let ncx;
-
 		if (isXml) {
 			html = qs(xml, "html");
 			ncx = qs(xml, "ncx");
@@ -33,34 +34,48 @@ class Navigation {
 			this.toc = this.load(xml);
 		} else if(html) {
 			this.toc = this.parseNav(xml);
+			this.landmarks = this.parseLandmarks(xml);
 		} else if(ncx){
 			this.toc = this.parseNcx(xml);
 		}
 
+		this.length = 0;
 		this.unpack(this.toc);
-	}
+  }
 
-	/**
-	 * Unpack navigation items
-	 * @private
-	 * @param  {array} toc
-	 */
+  /**
+   * Unpack navigation items
+   * @private
+   * @param  {array} toc
+   */
 	unpack(toc) {
 		var item;
 
 		for (var i = 0; i < toc.length; i++) {
 			item = toc[i];
-			this.tocByHref[item.href] = i;
-			this.tocById[item.id] = i;
+
+			if (item.href) {
+				this.tocByHref[item.href] = i;
+			}
+
+			if (item.id) {
+				this.tocById[item.id] = i;
+			}
+
+			this.length++;
+
+			if (item.subitems.length) {
+				this.unpack(item.subitems);
+			}
 		}
 
 	}
 
-	/**
-	 * Get an item from the navigation
-	 * @param  {string} target
-	 * @return {object} navItems
-	 */
+  /**
+   * Get an item from the navigation
+   * @param  {string} target
+   * @return {object} navItems
+   */
 	get(target) {
 		var index;
 
@@ -77,70 +92,86 @@ class Navigation {
 		return this.toc[index];
 	}
 
-	createTocItem(linkElement, id) {
-		var list = [],
-				tocLinkElms = linkElement.childNodes,
-				tocLinkArray = Array.prototype.slice.call(tocLinkElms);
+  /**
+   * Get a landmark by type
+   * List of types: https://idpf.github.io/epub-vocabs/structure/
+   * @param  {string} type
+   * @return {object} landmarkItems
+   */
+	landmark(type) {
+		var index;
 
-		var index = id ? id : 0;
-		tocLinkArray.forEach((linkElm) => {
-			if (linkElm.nodeName === 'li') {
-				var tocLink = qs(linkElm, 'a'),
-						tocLinkData = {
-							id: -1,
-							purchased: !tocLink.hasAttribute('purchased'),
-							href: tocLink.getAttribute('href'),
-							label: tocLink.textContent,
-							parent: null
-						},
-						subItemElm = qs(linkElm, 'ol');
-				index++;
-				tocLinkData.id = index;
-				if (id) {
-					tocLinkData.parent = id;
-				}
-				list.push(tocLinkData);
-				if (subItemElm) {
-					var subitems = this.createTocItem(subItemElm, index);
-					if (subitems && subitems.length > 0) {
-						index = index + subitems.length;
-						list = list.concat(subitems);
-					}
+		if(!type) {
+			return this.landmarks;
+		}
+
+		index = this.landmarksByType[type];
+
+		return this.landmarks[index];
+	}
+
+  /**
+   * Parse toc from a Epub > 3.0 Nav
+   * @private
+   * @param  {document} navHtml
+   * @return {array} navigation list
+   */
+	parseNav(navHtml){
+		var navElement = querySelectorByType(navHtml, "nav", "toc");
+		var navItems = navElement ? qsa(navElement, "li") : [];
+		var length = navItems.length;
+		var i;
+		var toc = {};
+		var list = [];
+		var item, parent;
+
+		if(!navItems || length === 0) return list;
+
+		for (i = 0; i < length; ++i) {
+			item = this.navItem(navItems[i]);
+			if (item) {
+				toc[item.id] = item;
+				if(!item.parent) {
+					list.push(item);
+				} else {
+					parent = toc[item.parent];
+					parent.subitems.push(item);
 				}
 			}
-		});
+		}
+
 		return list;
 	}
 
-	/**
-	 * Parse from a Epub > 3.0 Nav
-	 * @private
-	 * @param  {document} navHtml
-	 * @return {array} navigation list
-	 */
-	parseNav(navHtml){
-		var navElement = querySelectorByType(navHtml, "nav", "toc");
-		var tocItems = qs(navElement, "ol");
-		return this.createTocItem(tocItems);
-	}
-
-	/**
-	 * Create a navItem
-	 * @private
-	 * @param  {element} item
-	 * @return {object} navItem
-	 */
+  /**
+   * Create a navItem
+   * @private
+   * @param  {element} item
+   * @return {object} navItem
+   */
 	navItem(item){
-		var id = item.getAttribute("id") || false,
-				content = qs(item, "a"),
-				src = content.getAttribute("href") || "",
-				text = content.textContent || "",
-				subitems = [],
-				parentNode = item.parentNode,
-				parent;
+		let id = item.getAttribute("id") || undefined;
+		let content = filterChildren(item, "a", true);
 
-		if(parentNode && parentNode.nodeName === "navPoint") {
-			parent = parentNode.getAttribute("id");
+		if (!content) {
+			return;
+		}
+
+		let src = content.getAttribute("href") || "";
+		let text = content.textContent || "";
+		let subitems = [];
+		let parentItem = getParentByTagName(item, "li");
+		let parent;
+
+		if (parentItem) {
+			parent = parentItem.getAttribute("id");
+		}
+
+		while (!parent && parentItem) {
+			parentItem = getParentByTagName(parentItem, "li");
+			if (parentItem) {
+				parent = parentItem.getAttribute("id");
+			}
 		}
 
 		return {
@@ -148,16 +179,68 @@ class Navigation {
 			"href": src,
 			"label": text,
 			"subitems" : subitems,
-			"parent" : parent
+			"parent" : parent,
+			"purchased" : !content.hasAttribute("purchased")
 		};
 	}
 
-	/**
-	 * Parse from a Epub > 3.0 NC
-	 * @private
-	 * @param  {document} navHtml
-	 * @return {array} navigation list
-	 */
+  /**
+   * Parse landmarks from a Epub > 3.0 Nav
+   * @private
+   * @param  {document} navHtml
+   * @return {array} landmarks list
+   */
+	parseLandmarks(navHtml){
+		var navElement = querySelectorByType(navHtml, "nav", "landmarks");
+		var navItems = navElement ? qsa(navElement, "li") : [];
+		var length = navItems.length;
+		var i;
+		var list = [];
+		var item;
+
+		if(!navItems || length === 0) return list;
+
+		for (i = 0; i < length; ++i) {
+			item = this.landmarkItem(navItems[i]);
+			if (item) {
+				list.push(item);
+				this.landmarksByType[item.type] = i;
+			}
+		}
+
+		return list;
+	}
+
+  /**
+   * Create a landmarkItem
+   * @private
+   * @param  {element} item
+   * @return {object} landmarkItem
+   */
+	landmarkItem(item){
+		let content = filterChildren(item, "a", true);
+
+		if (!content) {
+			return;
+		}
+
+		let type = content.getAttributeNS("http://www.idpf.org/2007/ops", "type") || undefined;
+		let href = content.getAttribute("href") || "";
+		let text = content.textContent || "";
+
+		return {
+			"href": href,
+			"label": text,
+			"type" : type
+		};
+	}
+
+  /**
+   * Parse from a Epub > 3.0 NC
+   * @private
+   * @param  {document} navHtml
+   * @return {array} navigation list
+   */
 	parseNcx(tocXml){
 		var navPoints = qsa(tocXml, "navPoint");
 		var length = navPoints.length;
@@ -182,12 +265,12 @@ class Navigation {
 		return list;
 	}
 
-	/**
-	 * Create a ncxItem
-	 * @private
-	 * @param  {element} item
-	 * @return {object} ncxItem
-	 */
+  /**
+   * Create a ncxItem
+   * @private
+   * @param  {element} item
+   * @return {object} ncxItem
+   */
 	ncxItem(item){
 		var id = item.getAttribute("id") || false,
 				content = qs(item, "content"),
@@ -213,10 +296,10 @@ class Navigation {
 		};
 	}
 
-	/**
-	 * Load Spine Items
-	 * @param  {object} json the items to be loaded
-	 */
+  /**
+   * Load Spine Items
+   * @param  {object} json the items to be loaded
+   */
 	load(json) {
 		return json.map((item) => {
 			item.label = item.title;
@@ -227,11 +310,11 @@ class Navigation {
 		});
 	}
 
-	/**
-	 * forEach pass through
-	 * @param  {Function} fn function to run on each item
-	 * @return {method} forEach loop
-	 */
+  /**
+   * forEach pass through
+   * @param  {Function} fn function to run on each item
+   * @return {method} forEach loop
+   */
 	forEach(fn) {
 		return this.toc.forEach(fn);
 	}

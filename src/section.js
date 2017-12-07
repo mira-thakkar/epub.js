@@ -1,10 +1,12 @@
 import { defer } from "./utils/core";
 import EpubCFI from "./epubcfi";
 import Hook from "./utils/hook";
+import { sprint } from "./utils/core";
 import { replaceBase } from "./utils/replacements";
 
 /**
  * Represents a Section of the Book
+ *
  * In most books this is equivelent to a Chapter
  * @param {object} item  The spine item representing the section
  * @param {object} hooks hooks for serialize and content
@@ -12,11 +14,12 @@ import { replaceBase } from "./utils/replacements";
 class Section {
 	constructor(item, hooks){
 		this.idref = item.idref;
-		this.linear = item.linear;
+		this.linear = item.linear === "yes";
 		this.properties = item.properties;
 		this.index = item.index;
 		this.href = item.href;
 		this.url = item.url;
+		this.canonical = item.canonical;
 		this.next = item.next;
 		this.prev = item.prev;
 
@@ -88,15 +91,15 @@ class Section {
 
 		this.load(_request).
 			then(function(contents){
-				var serializer;
+				var userAgent = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+				var isIE = userAgent.indexOf('Trident') >= 0;
 				var Serializer;
-
-				if (typeof XMLSerializer === "undefined") {
+				if (typeof XMLSerializer === "undefined" || isIE) {
 					Serializer = require("xmldom").XMLSerializer;
 				} else {
 					Serializer = XMLSerializer;
 				}
-				serializer = new Serializer();
+				var serializer = new Serializer();
 				this.output = serializer.serializeToString(contents);
 				return this.output;
 			}.bind(this)).
@@ -115,13 +118,60 @@ class Section {
 
 	/**
 	 * Find a string in a section
-	 * TODO: need reimplementation from v0.2
-	 * @param  {string} query [description]
-	 * @return {[type]} [description]
+	 * @param  {string} _query The query string to find
+	 * @return {object[]} A list of matches, with form {cfi, excerpt}
 	 */
-	find(){
+	find(_query){
+		var section = this;
+		var matches = [];
+		var query = _query.toLowerCase();
+		var find = function(node){
+			var text = node.textContent.toLowerCase();
+			var range = section.document.createRange();
+			var cfi;
+			var pos;
+			var last = -1;
+			var excerpt;
+			var limit = 150;
 
-	}
+			while (pos != -1) {
+				// Search for the query
+				pos = text.indexOf(query, last + 1);
+
+				if (pos != -1) {
+					// We found it! Generate a CFI
+					range = section.document.createRange();
+					range.setStart(node, pos);
+					range.setEnd(node, pos + query.length);
+
+					cfi = section.cfiFromRange(range);
+
+					// Generate the excerpt
+					if (node.textContent.length < limit) {
+						excerpt = node.textContent;
+					}
+					else {
+						excerpt = node.textContent.substring(pos - limit/2, pos + limit/2);
+						excerpt = "..." + excerpt + "...";
+					}
+
+					// Add the CFI to the matches list
+					matches.push({
+						cfi: cfi,
+						excerpt: excerpt
+					});
+				}
+
+				last = pos;
+			}
+		};
+
+		sprint(section.document, function(node) {
+			find(node);
+		});
+
+		return matches;
+	};
 
 	/**
 	* Reconciles the current chapters layout properies with

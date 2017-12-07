@@ -1,12 +1,20 @@
 import EpubCFI from "./epubcfi";
 
+/**
+ * Map text locations to CFI ranges
+ * @class
+ */
 class Mapping {
-	constructor(layout, dev) {
+	constructor(layout, direction, axis, dev) {
 		this.layout = layout;
-		this.horizontal = (this.layout.flow === "paginated") ? true : false;
+		this.horizontal = (axis === "horizontal") ? true : false;
+		this.direction = direction || "ltr";
 		this._dev = dev;
 	}
 
+	/**
+	 * Find CFI pairs for entire section at once
+	 */
 	section(view) {
 		var ranges = this.findRanges(view);
 		var map = this.rangeListToCfiList(view.section.cfiBase, ranges);
@@ -14,6 +22,9 @@ class Mapping {
 		return map;
 	}
 
+	/**
+	 * Find CFI pairs for a page
+	 */
 	page(contents, cfiBase, start, end) {
 		var root = contents && contents.document ? contents.document.body : false;
 		var result;
@@ -44,16 +55,26 @@ class Mapping {
 	}
 
 	walk(root, func) {
-		//var treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT + NodeFilter.SHOW_TEXT, null, false);
-		var filter = { acceptNode: function(node) {
-			if (node && node.data && node.data.trim().length > 0 ) {
-				return NodeFilter.FILTER_ACCEPT;
-			} else {
-				return NodeFilter.FILTER_REJECT;
+		// IE11 has strange issue, if root is text node IE throws exception on
+		// calling treeWalker.nextNode(), saying
+		// Unexpected call to method or property access instead of returing null value
+		if(root && root.nodeType === Node.TEXT_NODE) {
+			return;
+		}
+		// safeFilter is required so that it can work in IE as filter is a function for IE
+		// and for other browser filter is an object.
+		var filter = {
+			acceptNode: function(node) {
+				if (node.data.trim().length > 0) {
+					return NodeFilter.FILTER_ACCEPT;
+				} else {
+					return NodeFilter.FILTER_REJECT;
+				}
 			}
-		}};
+		};
 		var safeFilter = filter.acceptNode;
 		safeFilter.acceptNode = filter.acceptNode;
+
 		var treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, safeFilter, false);
 		var node;
 		var result;
@@ -97,30 +118,57 @@ class Mapping {
 			$el = stack.shift();
 
 			found = this.walk($el, (node) => {
-				var left, right;
+				var left, right, top, bottom;
 				var elPos;
 				var elRange;
 
 
-				if(node.nodeType == Node.TEXT_NODE){
-					elRange = document.createRange();
-					elRange.selectNodeContents(node);
-					elPos = elRange.getBoundingClientRect();
+				elPos = this.getBounds(node);
+
+				if (this.horizontal && this.direction === "ltr") {
+
+					left = this.horizontal ? elPos.left : elPos.top;
+					right = this.horizontal ? elPos.right : elPos.bottom;
+
+					if( left >= start && left <= end ) {
+						return node;
+					} else if (right > start) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
+				} else if (this.horizontal && this.direction === "rtl") {
+
+					left = elPos.left;
+					right = elPos.right;
+
+					if( right <= end && right >= start ) {
+						return node;
+					} else if (left < end) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
 				} else {
-					elPos = node.getBoundingClientRect();
+
+					top = elPos.top;
+					bottom = elPos.bottom;
+
+					if( top >= start && top <= end ) {
+						return node;
+					} else if (bottom > start) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
 				}
 
-				left = this.horizontal ? elPos.left : elPos.top;
-				right = this.horizontal ? elPos.right : elPos.bottom;
-
-				if( left >= start && left <= end ) {
-					return node;
-				} else if (right > start) {
-					return node;
-				} else {
-					$prev = node;
-					stack.push(node);
-				}
 
 			});
 
@@ -146,29 +194,54 @@ class Mapping {
 
 			found = this.walk($el, (node) => {
 
-				var left, right;
+				var left, right, top, bottom;
 				var elPos;
 				var elRange;
 
+				elPos = this.getBounds(node);
 
-				if(node.nodeType == Node.TEXT_NODE){
-					elRange = document.createRange();
-					elRange.selectNodeContents(node);
-					elPos = elRange.getBoundingClientRect();
+				if (this.horizontal && this.direction === "ltr") {
+
+					left = Math.round(elPos.left);
+					right = Math.round(elPos.right);
+
+					if(left > end && $prev) {
+						return $prev;
+					} else if(right > end) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
+				} else if (this.horizontal && this.direction === "rtl") {
+
+					left = Math.round(this.horizontal ? elPos.left : elPos.top);
+					right = Math.round(this.horizontal ? elPos.right : elPos.bottom);
+
+					if(right < start && $prev) {
+						return $prev;
+					} else if(left < start) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
 				} else {
-					elPos = node.getBoundingClientRect();
-				}
 
-				left = this.horizontal ? elPos.left : elPos.top;
-				right = this.horizontal ? elPos.right : elPos.bottom;
+					top = Math.round(elPos.top);
+					bottom = Math.round(elPos.bottom);
 
-				if(left > end && $prev) {
-					return $prev;
-				} else if(right > end) {
-					return node;
-				} else {
-					$prev = node;
-					stack.push(node);
+					if(top > end && $prev) {
+						return $prev;
+					} else if(bottom > end) {
+						return node;
+					} else {
+						$prev = node;
+						stack.push(node);
+					}
+
 				}
 
 			});
@@ -189,16 +262,34 @@ class Mapping {
 		var ranges = this.splitTextNodeIntoRanges(node);
 		var range;
 		var pos;
-		var left;
+		var left, top, right;
 
 		for (var i = 0; i < ranges.length; i++) {
 			range = ranges[i];
 
 			pos = range.getBoundingClientRect();
-			left = this.horizontal ? pos.left : pos.top;
 
-			if( left >= start ) {
-				return range;
+			if (this.horizontal && this.direction === "ltr") {
+
+				left = pos.left;
+				if( left >= start ) {
+					return range;
+				}
+
+			} else if (this.horizontal && this.direction === "rtl") {
+
+				right = pos.right;
+				if( right <= end ) {
+					return range;
+				}
+
+			} else {
+
+				top = pos.top;
+				if( top >= start ) {
+					return range;
+				}
+
 			}
 
 			// prev = range;
@@ -213,20 +304,48 @@ class Mapping {
 		var prev;
 		var range;
 		var pos;
-		var left, right;
+		var left, right, top, bottom;
 
 		for (var i = 0; i < ranges.length; i++) {
 			range = ranges[i];
 
 			pos = range.getBoundingClientRect();
-			left = this.horizontal ? pos.left : pos.top;
-			right = this.horizontal ? pos.right : pos.bottom;
 
-			if(left > end && prev) {
-				return prev;
-			} else if(right > end) {
-				return range;
+			if (this.horizontal && this.direction === "ltr") {
+
+				left = pos.left;
+				right = pos.right;
+
+				if(left > end && prev) {
+					return prev;
+				} else if(right > end) {
+					return range;
+				}
+
+			} else if (this.horizontal && this.direction === "rtl") {
+
+				left = pos.left
+				right = pos.right;
+
+				if(right < start && prev) {
+					return prev;
+				} else if(left < start) {
+					return range;
+				}
+
+			} else {
+
+				top = pos.top;
+				bottom = pos.bottom;
+
+				if(top > end && prev) {
+					return prev;
+				} else if(bottom > end) {
+					return range;
+				}
+
 			}
+
 
 			prev = range;
 
@@ -314,6 +433,25 @@ class Mapping {
 		}
 
 		return map;
+	}
+
+	getBounds(node) {
+		let elPos;
+		if(node.nodeType == Node.TEXT_NODE){
+			let elRange = document.createRange();
+			elRange.selectNodeContents(node);
+			elPos = elRange.getBoundingClientRect();
+		} else {
+			elPos = node.getBoundingClientRect();
+		}
+		return elPos;
+	}
+
+	axis(axis) {
+		if (axis) {
+			this.horizontal = (axis === "horizontal") ? true : false;
+		}
+		return this.horizontal;
 	}
 }
 

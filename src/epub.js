@@ -1,8 +1,14 @@
 import 'url-polyfill'
 import Book from "./book";
-import EpubCFI from "./epubcfi";
 import Rendition from "./rendition";
+import EpubCFI from "./epubcfi";
 import Contents from "./contents";
+import * as core from "./utils/core";
+import '../libs/url/url-polyfill'
+
+import IframeView from "./managers/views/iframe";
+import DefaultViewManager from "./managers/default";
+import ContinuousViewManager from "./managers/continuous";
 
 /**
  * Creates a new Book
@@ -24,11 +30,12 @@ if (typeof(global) !== "undefined") {
 ePub.CFI = EpubCFI;
 ePub.Rendition = Rendition;
 ePub.Contents = Contents;
+ePub.utils = core;
 
 ePub.ViewManagers = {};
 ePub.Views = {};
 /**
- * register plugins
+ * Register Managers and Views
  */
 ePub.register = {
 	/**
@@ -46,10 +53,10 @@ ePub.register = {
 };
 
 // Default Views
-ePub.register.view("iframe", require("./managers/views/iframe"));
+ePub.register.view("iframe", IframeView);
 
 // Default View Managers
-ePub.register.manager("default", require("./managers/default"));
-ePub.register.manager("continuous", require("./managers/continuous"));
+ePub.register.manager("default", DefaultViewManager);
+ePub.register.manager("continuous", ContinuousViewManager);
 
 export default ePub;

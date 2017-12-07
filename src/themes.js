@@ -1,5 +1,10 @@
 import Url from "./utils/url";
 
+/**
+ * Themes to apply to displayed content
+ * @class
+ * @param {Rendition} rendition
+ */
 class Themes {
 	constructor(rendition) {
 		this.rendition = rendition;
@@ -18,6 +23,13 @@ class Themes {
 
 	}
 
+	/**
+	 * Add themes to be used by a rendition
+	 * @param {object | string}
+	 * @example themes.register("light", "http://example.com/light.css")
+	 * @example themes.register("light", { "body": { "color": "purple"}})
+	 * @example themes.register({ "light" : {...}, "dark" : {...}})
+	 */
 	register () {
 		if (arguments.length === 0) {
 			return;
@@ -36,6 +48,12 @@ class Themes {
 		}
 	}
 
+	/**
+	 * Add a default theme to be used by a rendition
+	 * @param {object | string} theme
+	 * @example themes.register("http://example.com/default.css")
+	 * @example themes.register({ "body": { "color": "purple"}})
+	 */
 	default (theme) {
 		if (!theme) {
 			return;
@@ -76,7 +94,7 @@ class Themes {
 		}
 	}
 
-	apply (name) {
+	select (name) {
 		var prev = this._current;
 		var contents;
 
@@ -103,9 +121,9 @@ class Themes {
 		var theme;
 
 		for (var name in themes) {
-			if (themes.hasOwnProperty(name) && name === this._current) {
+			if (themes.hasOwnProperty(name) && (name === this._current || name === "default")) {
 				theme = themes[name];
-				if(theme.rules || (theme.url && links.indexOf(theme.url) === -1)) {
+				if((theme.rules && Object.keys(theme.rules).length > 0) || (theme.url && links.indexOf(theme.url) === -1)) {
 					this.add(name, contents);
 				}
 				this._injected.push(name);
@@ -120,7 +138,7 @@ class Themes {
 	add (name, contents) {
 		var theme = this._themes[name];
 
-		if (!theme) {
+		if (!theme || !contents) {
 			return;
 		}
 
@@ -154,8 +172,20 @@ class Themes {
 		}
 	}
 
+	/**
+	 * Adjust the font size of a rendition
+	 * @param {number} size
+	 */
 	fontSize (size) {
 		this.override("font-size", size);
+	}
+
+	/**
+	 * Adjust the font-family of a rendition
+	 * @param {string} f
+	 */
+	font (f) {
+		this.override("font-family", f);
 	}
 
 	destroy() {
