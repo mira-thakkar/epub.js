@@ -1,10 +1,9 @@
-import 'url-polyfill'
 import Book from "./book";
 import Rendition from "./rendition";
 import EpubCFI from "./epubcfi";
 import Contents from "./contents";
 import * as core from "./utils/core";
-import '../libs/url/url-polyfill'
+import '../libs/url/url-polyfill';
 
 import IframeView from "./managers/views/iframe";
 import DefaultViewManager from "./managers/default";
